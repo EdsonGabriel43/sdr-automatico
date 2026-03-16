@@ -11,7 +11,8 @@ import {
     Settings,
     LogOut,
     Zap,
-    Megaphone
+    Megaphone,
+    Flame
 } from "lucide-react"
 
 interface SidebarProps extends React.HTMLAttributes<HTMLDivElement> { }
@@ -49,6 +50,12 @@ export function Sidebar({ className }: SidebarProps) {
             icon: Megaphone,
             href: "/campaigns",
             active: pathname === "/campaigns" || pathname.startsWith("/campaigns/"),
+        },
+        {
+            label: "Nurturing",
+            icon: Flame,
+            href: "/nurturing",
+            active: pathname === "/nurturing",
         },
         {
             label: "Configurações",

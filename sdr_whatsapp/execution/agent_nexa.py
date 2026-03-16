@@ -365,9 +365,9 @@ async def _process_incoming_message_impl(
     ).execute()
 
     if conversation["status"] == "contacted":
-        sb.table("conversations").update({"status": "responded"}).eq(
-            "id", conversation["id"]
-        ).execute()
+        sb.table("conversations").update(
+            {"status": "responded", "follow_up_count": 0}
+        ).eq("id", conversation["id"]).execute()
 
     # 4. Buscar histórico
     history_result = (
@@ -473,6 +473,23 @@ async def _process_incoming_message_impl(
 
             increment_chip_counter(chip["id"])
             logger.info(f"Resposta adaptativa enviada para {lead['nome']}")
+
+            # Agendar follow-up de 2h para leads em conversa ativa (quentes)
+            # Leads frios (contacted) são gerenciados pelo motor separado
+            current_conv_status = (
+                sb.table("conversations")
+                .select("status")
+                .eq("id", conversation["id"])
+                .single()
+                .execute()
+            ).data or {}
+            active_statuses = ("responded", "nurturing", "qualified")
+            if current_conv_status.get("status") in active_statuses:
+                next_followup = (datetime.utcnow() + timedelta(hours=2)).isoformat()
+                sb.table("conversations").update(
+                    {"next_follow_up_at": next_followup, "follow_up_count": 0}
+                ).eq("id", conversation["id"]).execute()
+                logger.info(f"Timer 2h agendado para {lead['nome']} (nurturing follow-up)")
 
         except Exception as e:
             logger.error(f"Erro ao enviar resposta: {e}")

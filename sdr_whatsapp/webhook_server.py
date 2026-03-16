@@ -39,7 +39,7 @@ from execution.campaign_manager import (
     get_campaign_stats,
     add_phone_to_lead,
 )
-from execution.follow_up_engine import run_followup_loop, check_and_send_followups
+from execution.follow_up_engine import run_followup_loop, check_and_send_followups, check_nurturing_followups
 from execution.chip_manager import (
     set_webhook,
     get_all_chips,
@@ -597,14 +597,81 @@ async def dashboard_overview():
     }
 
 
-# ===== FOLLOW-UPS MANUAL =====
+# ===== FOLLOW-UPS =====
 
 
 @app.post("/followups/run")
 async def run_followups_endpoint(background_tasks: BackgroundTasks):
-    """Dispara verificação de follow-ups manualmente."""
+    """Dispara verificação de follow-ups frios manualmente."""
     background_tasks.add_task(check_and_send_followups)
     return {"status": "started"}
+
+
+@app.get("/followups/nurturing")
+async def list_nurturing_leads():
+    """
+    Lista leads quentes (nurturing/responded/qualified) que estão sem resposta.
+    Retorna ordenado pelo mais urgente (last_outbound mais antigo).
+    """
+    sb = get_supabase()
+
+    convs = (
+        sb.table("conversations")
+        .select("id, status, current_step, follow_up_count, next_follow_up_at, updated_at, leads(id, nome, empresa, telefone, valor_divida)")
+        .in_("status", ["nurturing", "responded", "qualified"])
+        .order("updated_at", desc=False)
+        .limit(100)
+        .execute()
+    )
+
+    result = []
+    for conv in (convs.data or []):
+        # Buscar última mensagem outbound
+        last_out = (
+            sb.table("messages")
+            .select("content, created_at")
+            .eq("conversation_id", conv["id"])
+            .eq("direction", "outbound")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        last_outbound = last_out.data[0] if last_out.data else {}
+        result.append({
+            **conv,
+            "last_bot_message": last_outbound.get("content", "")[:150],
+            "last_bot_at": last_outbound.get("created_at", ""),
+        })
+
+    return {"conversations": result}
+
+
+class TriggerNurturingRequest(BaseModel):
+    conversation_id: str
+
+
+@app.post("/followups/nurturing/trigger")
+async def trigger_nurturing_followup(req: TriggerNurturingRequest, background_tasks: BackgroundTasks):
+    """Dispara imediatamente um follow-up nurturing para uma conversa específica."""
+    sb = get_supabase()
+
+    # Setar next_follow_up_at para agora para que o engine pegue imediatamente
+    sb.table("conversations").update(
+        {"next_follow_up_at": datetime.utcnow().isoformat()}
+    ).eq("id", req.conversation_id).in_("status", ["nurturing", "responded", "qualified"]).execute()
+
+    background_tasks.add_task(check_nurturing_followups)
+    return {"status": "triggered", "conversation_id": req.conversation_id}
+
+
+@app.post("/followups/nurturing/close/{conversation_id}")
+async def close_nurturing_lead(conversation_id: str):
+    """Encerra manualmente um lead nurturing sem resposta."""
+    sb = get_supabase()
+    sb.table("conversations").update(
+        {"status": "no_response", "next_follow_up_at": None}
+    ).eq("id", conversation_id).execute()
+    return {"status": "closed", "conversation_id": conversation_id}
 
 
 # ===== HEALTH =====
