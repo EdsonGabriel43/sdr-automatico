@@ -1,0 +1,94 @@
+{
+    "messages": {
+        "first_contact": {
+            "text": "{greeting}, {nome}! Aqui é a Nexa, da Syneos Consultoria. Você pode confirmar se você é o(a) {nome} que trabalha na {empresa}?",
+            "buttons": [
+                {
+                    "id": "btn_continue",
+                    "text": "Sim, sou eu!"
+                },
+                {
+                    "id": "btn_block",
+                    "text": "Parar contato"
+                }
+            ]
+        },
+        "confirm_company": {
+            "text": "A legislação tributária sofreu mudanças recentes que podem gerar impacto direto nas questões financeiras da {empresa}. Você é a pessoa que cuida dessas questões ou há mais alguém envolvido?"
+        },
+        "validate_authority": {
+            "text": "E quem trata das questoes tributarias e financeiras na empresa? E voce ou envolve mais alguem?"
+        },
+        "pitch_problem": {
+            "text": "O motivo do meu contato e que identificamos passivos em aberto na PGFN no CNPJ de voces."
+        },
+        "pitch_solution": {
+            "text": "Ja mapeamos uma estrategia pela Lei 13.988 que reduz em ate 70% o valor de multas, juros e encargos, alem de estender o prazo de pagamento em ate 145 meses. A ideia e aliviar o caixa da empresa. Faz sentido pra voce?"
+        },
+        "followup_1": {
+            "text": "Oi, {nome}! Te mandei uma mensagem outro dia sobre uma oportunidade de reducao de encargos tributarios para a {empresa}. Posso te explicar rapidamente?",
+            "delay_hours": 48
+        },
+        "followup_2": {
+            "text": "{nome}, so passando aqui porque o prazo de adesao a Lei 13.988 esta se esgotando e a {empresa} pode perder a chance de reduzir ate 70% do passivo tributario. Se tiver 2 minutos, te explico.",
+            "delay_hours": 72
+        },
+        "followup_3": {
+            "text": "{nome}, como nao obtive retorno, vou encerrar o contato. Caso futuramente precise de ajuda com regularizacao fiscal, pode me chamar aqui. Obrigada e sucesso!",
+            "delay_hours": 96
+        }
+    },
+    "responses": {
+        "confirm_identity": "A legislação tributária sofreu mudanças recentes que podem gerar impacto direto nas questões financeiras da {empresa}. Você é a pessoa que cuida dessas questões ou há mais alguém envolvido?",
+        "validate_authority": "E quem trata das questoes tributarias e financeiras na empresa? E voce ou envolve mais alguem?",
+        "is_decision_maker": "O motivo do meu contato e que identificamos passivos em aberto na PGFN no CNPJ de voces.",
+        "pitch_solution": "Ja mapeamos uma estrategia pela Lei 13.988 que reduz em ate 70% o valor de multas, juros e encargos, alem de estender o prazo de pagamento em ate 145 meses. A ideia e aliviar o caixa da empresa. Faz sentido pra voce?",
+        "not_decision_maker": "Entendo! Voce teria o contato do responsavel financeiro para que eu possa direcionar as informacoes?",
+        "gatekeeper": "E sobre uma atualizacao da Lei 13.988 que impacta o CNPJ da {empresa}. Preciso validar uma informacao pontual com o responsavel financeiro. Consegue me transferir?",
+        "wrong_person": "Certo, pode ter havido um engano nos dados. Esse numero pertence a alguem ligado a {empresa}? Se nao, me desculpe pelo contato.",
+        "not_at_company": "Entendo. Obrigada pela informacao. Tenha um excelente dia!",
+        "already_negotiating": "Que bom que ja esta cuidando disso. Mas no direito tributario, cada escritorio tem uma tese diferente. A gente pode fazer um comparativo sem custo — se nossa condicao for melhor, voce migra e economiza. Se for igual, voce mantem. Vale a pena dar uma olhada?",
+        "objection_accountant": "Respeito muito o trabalho do contador. Mas a nossa atuacao e 100% juridica na Lei de Transacao Tributaria, algo que foge da rotina contabil. A ideia e uma segunda opiniao tecnica. Se a gente encontrar algo que passou batido, voce economiza. Se nao, voce valida que esta tudo certo.",
+        "objection_competitor": "Que bom que ja esta cuidando disso. Mas no direito tributario, cada escritorio tem uma tese. A gente pode fazer um comparativo sem custo pra voce avaliar.",
+        "objection_no_money": "Justamente por isso que pode fazer sentido conversar. O foco nao e pagar boleto agora, mas usar a lei pra suspender execucoes, proteger o patrimonio e jogar o pagamento pra frente com desconto. E sobre folego financeiro.",
+        "objection_price": "O investimento varia de acordo com o passivo e a complexidade. Um de nossos especialistas pode te explicar melhor depois de analisar a situacao. Faz sentido agendar uma conversa rapida pra voce entender como funciona?",
+        "objection_data_source": "Usamos bases de dados publicas da PGFN e Receita Federal para identificar empresas aptas aos programas de regularizacao do governo. Tudo fonte publica e legal.",
+        "objection_is_robot": "Sou sim! Sou a Nexa, assistente virtual da Syneos. Faco a triagem inicial e depois conecto voce com um dos nossos consultores especializados pra falar sobre seu caso. Quer que eu faca isso?",
+        "objection_bad_experience": "Entendo sua frustracao. A nossa atuacao e pautada na Lei Federal 13.988, com total seguranca juridica. Podemos fazer uma analise tecnica sem compromisso pra voce validar.",
+        "objection_send_email": "Cada caso tem uma estrategia especifica que nao da pra resumir num email. Um dos nossos especialistas te explica os numeros exatos em 10 minutos. Fica melhor hoje a tarde ou amanha de manha?",
+        "not_interested": "Entendo. So pra eu registrar: voce nao tem interesse no momento ou ja resolveu a questao do passivo de outra forma?",
+        "busy": "Sem problemas! Posso te chamar em quanto tempo? Ou voce prefere retornar quando tiver livre?",
+        "hostile": "Entendido! Vou remover seu contato da lista. Obrigada pelo retorno e tenha uma otima semana!",
+        "block_confirm": "Entendido! Seu contato foi removido da nossa lista. Nao enviaremos mais mensagens. Tenha um otimo dia!",
+        "handoff_warm": "Tenho uma projecao inicial aqui, mas um dos nossos consultores especializados consegue te explicar melhor os numeros e a estrategia. Qual o melhor horario pra voce conversar? De manha ou de tarde?",
+        "handoff_schedule": "Posso agendar uma conversa com um de nossos consultores especializados. Qual horario fica melhor pra voce?",
+        "handoff_confirm": "Perfeito! Vou agendar e te confirmo aqui. Ele te liga nesse numero mesmo?",
+        "qualification_q1": "Esse passivo esta impedindo voces de emitir Certidao Negativa ou travando credito bancario?",
+        "qualification_q2": "A empresa esta faturando normalmente ou teve queda em relacao a anos anteriores?",
+        "qualification_q3": "Voces tem ideia do tamanho desse passivo ou nunca fizeram um levantamento completo?",
+        "qualification_q4": "Se a gente conseguir reduzir drasticamente esse passivo e liberar o caixa, o que mudaria na operacao de voces?",
+        "qualification_q5": "A empresa esta com os debitos em aberto por estrategia ou necessidade?",
+        "got_referral": "Obrigada pela indicacao! Vou entrar em contato com {referral_name}. Voce tem o numero de telefone ou email dele(a)?",
+        "wants_more_info": "A Syneos e especializada na Lei de Transacao Tributaria. Atuamos no juridico pra reduzir multas, juros e encargos em ate 70% e estender prazos de pagamento. Posso te conectar com um dos nossos consultores especializados pra uma analise do caso de voces?",
+        "followup_positive": "Que bom que voce tem interesse! Entao, o motivo do meu contato e que identificamos que a {empresa} tem passivos em aberto na PGFN. A boa noticia e que existe uma estrategia legal pela Lei 13.988 que pode reduzir esse valor. Voce cuida dessa parte tributaria na empresa?",
+        "handoff_notification": "LEAD QUALIFICADO - HANDOFF\n\nEmpresa: {empresa}\nCNPJ: {cnpj}\nDecisor: {nome}\nCargo: {cargo}\nPassivo: R$ {valor_divida}\nTipo: {tipo_divida}\n\nResumo da conversa:\n{summary}\n\nResponda esta mensagem para aceitar o lead."
+    },
+    "greetings": [
+        "Bom dia",
+        "Boa tarde",
+        "Boa noite"
+    ],
+    "followup_intervals_hours": [
+        48,
+        72,
+        96
+    ],
+    "max_followups": 3,
+    "conversation_steps": {
+        "1": "identification",
+        "2": "authority_validation",
+        "3": "pitch",
+        "4": "qualification",
+        "5": "handoff"
+    }
+}

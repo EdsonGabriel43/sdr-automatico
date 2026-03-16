@@ -1,0 +1,4 @@
+site:linkedin.com/in "Personal Trainer" São Paulo
+site:instagram.com "Personal Trainer" São Paulo
+site:tiktok.com "Personal Trainer" São Paulo
+site:twitter.com "Personal Trainer" São Paulo

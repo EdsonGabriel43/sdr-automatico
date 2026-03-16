@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  wa-server:
+    build: ./wa-server
+    container_name: sdr-wa-server
+    restart: always
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - WEBHOOK_URL=http://webhook-server:5000/webhook
+
+  webhook-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: sdr-webhook-server
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - WA_SERVER_URL=http://wa-server:3001
+    env_file:
+      - .env
+    depends_on:
+      - wa-server

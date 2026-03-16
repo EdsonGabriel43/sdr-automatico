@@ -1,0 +1,31 @@
+# Ignorar arquivos de dados grandes
+*.csv
+*.xlsx
+*.log
+
+# Pastas de dados
+pgfn_module/*.csv
+pgfn_module/arquivo_lai_SIDA_*.csv
+
+# Cache e venv
+__pycache__/
+*.pyc
+.venv/
+env/
+node_modules/
+.next/
+
+# WhatsApp session (arquivos de cache grandes)
+sdr_whatsapp/wa-server/.wwebjs_auth/
+sdr_whatsapp/wa-server/node_modules/
+sdr_whatsapp/evolution-native/node_modules/
+
+# Arquivos temporários e diagnóstico
+sdr_whatsapp/*.txt
+sdr_whatsapp/diag*.py
+sdr_whatsapp/check_logs*.py
+~WRL*.tmp
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
