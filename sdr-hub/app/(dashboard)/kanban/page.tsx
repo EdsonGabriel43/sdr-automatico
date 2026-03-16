@@ -7,14 +7,11 @@ export default async function KanbanPage() {
     const columns = await getKanbanLeads() as any
 
     const columnConfig = [
-        { id: 'to_contact', title: 'Para Contactar', color: 'bg-slate-500/10 border-slate-500/20' },
-        { id: 'no_response', title: 'Não Respondeu', color: 'bg-orange-500/10 border-orange-500/20' },
-        { id: 'disqualified', title: 'Desqualificado', color: 'bg-red-500/10 border-red-500/20' },
-        { id: 'talking_gatekeeper', title: 'Em Conversa (GK)', color: 'bg-blue-500/10 border-blue-500/20' },
-        { id: 'talking_decision_maker', title: 'Em Conversa (Decisor)', color: 'bg-purple-500/10 border-purple-500/20' },
-        { id: 'meeting_scheduled', title: 'Reunião Marcada', color: 'bg-green-500/10 border-green-500/20' },
-        { id: 'meeting_no_show', title: 'Não Compareceu', color: 'bg-rose-500/10 border-rose-500/20' },
-        { id: 'closing', title: 'Em Fechamento', color: 'bg-emerald-500/10 border-emerald-500/20' },
+        { id: 'pending',    title: 'Pendente',         color: 'bg-slate-500/10 border-slate-500/20' },
+        { id: 'contacted',  title: 'Contatado',         color: 'bg-blue-500/10 border-blue-500/20' },
+        { id: 'responded',  title: 'Em Conversa',       color: 'bg-amber-500/10 border-amber-500/20' },
+        { id: 'qualified',  title: 'Qualificado',       color: 'bg-purple-500/10 border-purple-500/20' },
+        { id: 'handed_off', title: 'Encerrado / Handoff', color: 'bg-emerald-500/10 border-emerald-500/20' },
     ]
 
     return (
@@ -38,21 +35,21 @@ export default async function KanbanPage() {
                                 </div>
 
                                 <div className="flex-1 p-2 overflow-y-auto space-y-3">
-                                    {leads.map((lead: any) => (
-                                        <Link key={lead.id} href={`/leads/${lead.id}`} className="block">
+                                    {leads.map((conv: any) => (
+                                        <Link key={conv.id} href={`/leads/${conv.leads?.id}`} className="block">
                                             <Card className="bg-card/80 border-border/50 hover:border-primary/50 transition-colors cursor-pointer group shadow-sm">
                                                 <CardContent className="p-3">
                                                     <div className="flex justify-between items-start mb-2">
-                                                        <div className="font-medium text-white truncate max-w-[180px]">{lead.nome}</div>
-                                                        {lead.conversations?.[0]?.current_step && lead.conversations[0].current_step > 0 && (
+                                                        <div className="font-medium text-white truncate max-w-[180px]">{conv.leads?.nome}</div>
+                                                        {conv.current_step > 0 && (
                                                             <Badge variant="outline" className="text-[10px] h-5 px-1 border-primary/30 text-primary bg-primary/5">
-                                                                Step {lead.conversations[0].current_step}
+                                                                Step {conv.current_step}
                                                             </Badge>
                                                         )}
                                                     </div>
-                                                    <div className="text-xs text-muted-foreground truncate mb-1">{lead.empresa}</div>
+                                                    <div className="text-xs text-muted-foreground truncate mb-1">{conv.leads?.empresa}</div>
                                                     <div className="text-xs text-muted-foreground truncate flex items-center gap-1">
-                                                        {lead.cargo || 'Cargo não informado'}
+                                                        {conv.leads?.cargo || 'Cargo não informado'}
                                                     </div>
                                                 </CardContent>
                                             </Card>
