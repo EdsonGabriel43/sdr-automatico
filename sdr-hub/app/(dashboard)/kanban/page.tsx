@@ -1,7 +1,13 @@
+"use client"
+
+import { useEffect, useState, useCallback } from "react"
 import { getKanbanLeads } from "@/app/actions"
+import { supabase } from "@/lib/supabase"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import Link from "next/link"
+import { Loader2, RefreshCw } from "lucide-react"
 
 const COLUMNS = [
     { id: 'para_contactar',      title: 'Para Contactar',           color: 'border-slate-500/30 bg-slate-500/5' },
@@ -18,20 +24,56 @@ const COLUMNS = [
     { id: 'em_negociacao',       title: 'Em Negociação',             color: 'border-emerald-500/30 bg-emerald-500/5' },
 ]
 
-export default async function KanbanPage() {
-    const columns = await getKanbanLeads() as any
+export default function KanbanPage() {
+    const [columns, setColumns] = useState<any>(null)
+    const [loading, setLoading] = useState(true)
+    const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+
+    const fetchData = useCallback(async () => {
+        const data = await getKanbanLeads()
+        setColumns(data)
+        setLastUpdate(new Date())
+        setLoading(false)
+    }, [])
+
+    useEffect(() => {
+        fetchData()
+
+        const channel = supabase
+            .channel('kanban-realtime')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => {
+                fetchData()
+            })
+            .subscribe()
+
+        return () => { supabase.removeChannel(channel) }
+    }, [fetchData])
+
+    if (loading) return (
+        <div className="flex items-center justify-center h-full text-muted-foreground">
+            <Loader2 className="h-6 w-6 animate-spin mr-2" /> Carregando pipeline...
+        </div>
+    )
 
     return (
         <div className="h-[calc(100vh-8rem)] flex flex-col">
             <div className="flex items-center justify-between mb-6">
                 <h1 className="text-3xl font-bold tracking-tight text-white">Pipeline de Leads</h1>
-                <span className="text-sm text-muted-foreground">{COLUMNS.length} etapas</span>
+                <div className="flex items-center gap-3">
+                    <span className="text-xs text-muted-foreground">
+                        Atualizado: {lastUpdate.toLocaleTimeString('pt-BR')}
+                    </span>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={fetchData} title="Atualizar">
+                        <RefreshCw className="h-4 w-4" />
+                    </Button>
+                    <span className="text-sm text-muted-foreground">{COLUMNS.length} etapas</span>
+                </div>
             </div>
 
             <div className="flex-1 overflow-x-auto pb-4">
                 <div className="flex gap-3 h-full" style={{ minWidth: `${COLUMNS.length * 250}px` }}>
                     {COLUMNS.map((col) => {
-                        const leads: any[] = columns[col.id] || []
+                        const leads: any[] = (columns && columns[col.id]) || []
                         return (
                             <div
                                 key={col.id}
