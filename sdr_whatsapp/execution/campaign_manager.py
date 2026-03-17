@@ -67,11 +67,20 @@ def import_leads_from_csv(
     count = 0
 
     import io
-    # Decodificar arquivo e detectar delimitador
-    content_str = file_content.decode('utf-8')
+    # Decodificar arquivo tentando múltiplos encodings (Excel BR usa cp1252/latin-1)
+    content_str = None
+    for enc in ('utf-8-sig', 'utf-8', 'cp1252', 'latin-1', 'iso-8859-1'):
+        try:
+            content_str = file_content.decode(enc)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    if content_str is None:
+        content_str = file_content.decode('latin-1', errors='replace')
+
     sample = content_str[:2048]
     delimiter = ";" if ";" in sample else ","
-    
+
     # Criar um buffer legível
     f = io.StringIO(content_str)
     reader = csv.DictReader(f, delimiter=delimiter)
@@ -237,11 +246,7 @@ def create_campaign(
 
 def is_business_hours() -> bool:
     """Verifica se estamos em horário comercial (seg-sex, 8h-18h)."""
-    # A VPS costuma rodar em UTC. Subtraímos 3 horas para fuso de Brasília.
-    from datetime import timedelta
-    now_utc = datetime.now()
-    now = now_utc - timedelta(hours=3)
-    
+    now = datetime.now()
     # Seg=0, Dom=6
     if now.weekday() >= 5:
         return False
