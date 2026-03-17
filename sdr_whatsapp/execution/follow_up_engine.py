@@ -398,77 +398,70 @@ async def check_and_send_followups() -> dict:
     return metrics
 
 
-async def check_pending_handoffs() -> dict:
+async def recover_stuck_handoffs() -> dict:
     """
-    Detecta conversas 'qualified' sem handoff registrado na tabela handoffs
-    e dispara o handoff automaticamente.
-    Garante que nenhum lead qualificado fique travado sem notificar o consultor.
+    Detecta leads em status 'qualified' sem handoff registrado e dispara automaticamente.
+    Evita que leads travados no step 5 precisem de intervenção manual.
     """
     from .agent_nexa import trigger_handoff
 
     sb = get_supabase()
-    metrics = {"handoffs_triggered": 0, "errors": 0}
+    metrics = {"recovered": 0, "errors": 0}
 
-    # Busca conversas qualificadas
+    # Buscar conversas qualified sem handoff registrado
     convs = (
         sb.table("conversations")
-        .select("*, leads(*)")
+        .select("*, leads(*), chips(*)")
         .eq("status", "qualified")
+        .gte("current_step", 5)
         .execute()
     )
 
     if not convs.data:
         return metrics
 
+    # IDs que já têm handoff
+    existing = sb.table("handoffs").select("conversation_id").execute()
+    handoff_conv_ids = {h["conversation_id"] for h in (existing.data or [])}
+
     for conv in convs.data:
-        conv_id = conv["id"]
+        if conv["id"] in handoff_conv_ids:
+            continue
+
         lead = conv.get("leads") or {}
-
-        # Verifica se já existe handoff para esta conversa
-        existing = (
-            sb.table("handoffs")
-            .select("id")
-            .eq("conversation_id", conv_id)
-            .limit(1)
-            .execute()
-        )
-
-        if existing.data:
-            continue  # Handoff já foi registrado
-
-        logger.info(f"Lead qualificado sem handoff: {lead.get('nome', '?')} — disparando automaticamente")
-
-        # Busca histórico
-        history = (
-            sb.table("messages")
-            .select("direction, content, created_at")
-            .eq("conversation_id", conv_id)
-            .order("created_at")
-            .limit(20)
-            .execute()
-        )
-
-        variables = {
-            "nome": lead.get("nome", ""),
-            "empresa": lead.get("empresa", ""),
-            "valor_divida": lead.get("valor_divida", ""),
-            "cnpj": lead.get("cnpj", ""),
-        }
-
         try:
-            await trigger_handoff(conv_id, lead, history.data or [], variables)
-            metrics["handoffs_triggered"] += 1
-            logger.info(f"Handoff automático disparado para {lead.get('nome', '?')}")
+            msgs = (
+                sb.table("messages")
+                .select("direction, content, created_at")
+                .eq("conversation_id", conv["id"])
+                .order("created_at")
+                .execute()
+            )
+            history = msgs.data or []
+
+            variables = {
+                "nome": lead.get("nome", ""),
+                "empresa": lead.get("empresa", ""),
+                "cnpj": lead.get("cnpj", ""),
+                "cargo": lead.get("cargo", ""),
+                "valor_divida": lead.get("valor_divida", ""),
+                "tipo_divida": lead.get("tipo_divida", ""),
+            }
+
+            await trigger_handoff(conv["id"], lead, history, variables)
+            metrics["recovered"] += 1
+            logger.info(f"Handoff recuperado automaticamente: {lead.get('nome')} ({lead.get('empresa')})")
+
         except Exception as e:
-            logger.error(f"Erro ao disparar handoff automático para {lead.get('nome', '?')}: {e}")
             metrics["errors"] += 1
+            logger.error(f"Erro ao recuperar handoff para conversa {conv['id']}: {e}")
 
     return metrics
 
 
 async def run_followup_loop(interval_minutes: int = 30):
     """
-    Loop contínuo que verifica follow-ups pendentes (frios e quentes) e handoffs pendentes.
+    Loop contínuo que verifica follow-ups pendentes (frios e quentes).
     Roda a cada 'interval_minutes' minutos.
     """
     logger.info(f"Iniciando loop de follow-ups (intervalo: {interval_minutes}min)")
@@ -484,12 +477,12 @@ async def run_followup_loop(interval_minutes: int = 30):
                 cold_metrics = await check_and_send_followups()
                 # Follow-ups de leads quentes (nurturing/responded)
                 warm_metrics = await check_nurturing_followups()
-                # Handoffs pendentes (qualified sem handoff registrado)
-                handoff_metrics = await check_pending_handoffs()
+                # Recovery automático de leads qualificados sem handoff
+                handoff_metrics = await recover_stuck_handoffs()
                 logger.info(
                     f"Ciclo concluído — frios: {cold_metrics['followups_sent']} enviados | "
                     f"quentes: {warm_metrics['followups_sent']} enviados | "
-                    f"handoffs: {handoff_metrics['handoffs_triggered']} disparados"
+                    f"handoffs recuperados: {handoff_metrics['recovered']}"
                 )
             else:
                 logger.info("Fora do horário comercial, aguardando...")

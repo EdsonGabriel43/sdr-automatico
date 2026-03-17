@@ -18,6 +18,19 @@ logger = logging.getLogger(__name__)
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+_TEMPLATES_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "templates.json")
+
+
+def _load_prompts() -> tuple[str, str]:
+    """Lê classifier_prompt e system_prompt do templates.json em runtime."""
+    try:
+        with open(_TEMPLATES_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("classifier_prompt", CLASSIFIER_PROMPT), data.get("system_prompt", NEXA_PERSONA)
+    except Exception as e:
+        logger.warning(f"Erro ao carregar prompts do templates.json: {e}. Usando prompts padrão.")
+        return CLASSIFIER_PROMPT, NEXA_PERSONA
+
 # Categorias de intenção alinhadas com o Playbook Nexa
 INTENT_CATEGORIES = [
     # === Fluxo Principal ===
@@ -324,10 +337,11 @@ MENSAGEM A CLASSIFICAR:
 Retorne o JSON de classificação:"""
 
     try:
+        classifier_prompt, _ = _load_prompts()
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": CLASSIFIER_PROMPT},
+                {"role": "system", "content": classifier_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,
@@ -458,9 +472,10 @@ INSTRUÇÕES:
 Responda APENAS com a mensagem para enviar ao lead (sem aspas, sem explicações):"""
 
     # Função auxiliar para chamar o LLM
+    _, nexa_persona = _load_prompts()
     def call_llm(prompt_suffix="", temp=0.75):
         messages = [
-            {"role": "system", "content": NEXA_PERSONA},
+            {"role": "system", "content": nexa_persona},
             {"role": "user", "content": user_prompt + prompt_suffix},
         ]
         response = client.chat.completions.create(

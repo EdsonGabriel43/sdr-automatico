@@ -743,7 +743,7 @@ async def execute_decision_tree(
             return await respond("handoff_schedule")
 
         # Qualquer resposta positiva no step 5 → disparar handoff imediatamente
-        if intent in ("interested", "positive_response", "confirm_identity", "wants_more_info", "confirm_company"):
+        if intent in ("interested", "positive_response", "confirm_identity", "wants_more_info", "confirm_company", "is_decision_maker"):
             await trigger_handoff(conv_id, lead, conversation_history, variables)
             return await respond("handoff_confirm")
 
