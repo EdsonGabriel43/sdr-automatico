@@ -60,9 +60,16 @@ export default async function CampaignsPage() {
                                     <div className="space-y-1">
                                         <p className="text-xs text-muted-foreground flex items-center gap-1">
                                             <Users className="h-3 w-3" />
-                                            Leads Contatados
+                                            Contatados
                                         </p>
-                                        <p className="text-lg font-medium text-white">{campaign.messages_sent || 0}</p>
+                                        <p className="text-lg font-medium text-white">{campaign.leads_contacted || 0}</p>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                            <Users className="h-3 w-3" />
+                                            Qualificados
+                                        </p>
+                                        <p className="text-lg font-medium text-emerald-400">{campaign.leads_qualified || 0}</p>
                                     </div>
                                 </div>
 

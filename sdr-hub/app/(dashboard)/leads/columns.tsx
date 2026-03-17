@@ -22,10 +22,9 @@ export type Lead = {
     nome: string
     empresa: string
     cargo: string
-    status: string
-    linkedin: string
-    created_at: string
+    uf?: string
     valor_divida?: number
+    created_at: string
 }
 
 export const columns: ColumnDef<Lead>[] = [
@@ -74,15 +73,16 @@ export const columns: ColumnDef<Lead>[] = [
         cell: ({ row }) => <div className="text-muted-foreground truncate max-w-[150px]">{row.getValue("cargo")}</div>,
     },
     {
-        accessorKey: "status",
-        header: "Status",
+        accessorKey: "uf",
+        header: "UF",
+        cell: ({ row }) => <div className="text-muted-foreground text-center">{row.getValue("uf") || "—"}</div>,
+    },
+    {
+        accessorKey: "valor_divida",
+        header: "Passivo",
         cell: ({ row }) => {
-            const val = row.getValue("status") as string
-            return (
-                <Badge variant="outline" className="text-xs uppercase bg-white/5 border-white/10">
-                    {val === 'new' ? 'Novo' : val}
-                </Badge>
-            )
+            const val = row.getValue("valor_divida") as number
+            return <div className="text-emerald-400 font-medium text-sm">{val ? `R$ ${Number(val).toLocaleString("pt-BR")}` : "—"}</div>
         },
     },
     {
@@ -110,7 +110,7 @@ export const columns: ColumnDef<Lead>[] = [
                             <Link href={`/leads/${lead.id}`}>Ver Detalhes</Link>
                         </DropdownMenuItem>
                         <DropdownMenuItem asChild>
-                            <a href={lead.linkedin} target="_blank">Abrir LinkedIn</a>
+                            <Link href={`/leads/${lead.id}`}>Ver Conversa</Link>
                         </DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>
