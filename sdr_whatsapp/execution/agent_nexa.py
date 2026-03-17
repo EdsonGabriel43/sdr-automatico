@@ -735,15 +735,15 @@ async def execute_decision_tree(
 
     # --- ESTÁGIO 5: HANDOFF ---
     if current_step == 5:
-        if intent in ("interested", "positive_response", "confirm_identity", "wants_more_info"):
-            # NUNCA dizer "reunião agendada" — apenas SUGERIR
-            return await respond("handoff_schedule")
+        if intent == "not_interested":
+            sb.table("conversations").update({"status": "not_interested"}).eq("id", conv_id).execute()
+            return await respond("not_interested")
 
         if intent == "busy":
             return await respond("handoff_schedule")
 
-        # Lead confirmou horário → agora sim, confirmar agendamento
-        if intent == "confirm_company":
+        # Qualquer resposta positiva no step 5 → disparar handoff imediatamente
+        if intent in ("interested", "positive_response", "confirm_identity", "wants_more_info", "confirm_company"):
             await trigger_handoff(conv_id, lead, conversation_history, variables)
             return await respond("handoff_confirm")
 
