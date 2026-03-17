@@ -543,6 +543,37 @@ async def send_manual_message(conversation_id: str, body: dict):
 # ===== HANDOFFS ENDPOINTS =====
 
 
+@app.post("/conversations/{conversation_id}/trigger-handoff")
+async def trigger_handoff_endpoint(conversation_id: str):
+    """Dispara handoff manualmente para uma conversa qualificada."""
+    from execution.agent_nexa import trigger_handoff, get_supabase as agent_get_supabase
+    sb = get_supabase()
+
+    conv = sb.table("conversations").select("*, leads(*)").eq("id", conversation_id).single().execute()
+    if not conv.data:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    lead = conv.data.get("leads")
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    msgs = sb.table("messages").select("direction, content, created_at").eq("conversation_id", conversation_id).order("created_at", ascending=True).limit(20).execute()
+    history = msgs.data or []
+
+    variables = {
+        "nome": lead.get("nome", ""),
+        "empresa": lead.get("empresa", ""),
+        "valor_divida": lead.get("valor_divida", ""),
+        "cnpj": lead.get("cnpj", ""),
+    }
+
+    try:
+        await trigger_handoff(conversation_id, lead, history, variables)
+        return {"success": True, "message": f"Handoff disparado para {lead.get('nome')}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/handoffs")
 async def list_handoffs(status: Optional[str] = None):
     """Lista handoffs."""
