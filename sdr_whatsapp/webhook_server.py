@@ -497,6 +497,49 @@ async def conversation_messages(conversation_id: str):
     return {"messages": result.data or []}
 
 
+@app.post("/conversations/{conversation_id}/send")
+async def send_manual_message(conversation_id: str, body: dict):
+    """Envia mensagem manual para um lead via Hub (intervenção humana)."""
+    sb = get_supabase()
+    message = (body.get("message") or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    conv = sb.table("conversations").select("id, leads(telefone), chip_id, chips(phone_number, instance_name)").eq("id", conversation_id).single().execute()
+    if not conv.data:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    phone = conv.data.get("leads", {}).get("telefone")
+    if not phone:
+        raise HTTPException(status_code=400, detail="Lead has no phone number")
+
+    chip_data = conv.data.get("chips") or {}
+    instance_name = chip_data.get("instance_name")
+    if not instance_name:
+        chip_result = sb.table("chips").select("instance_name").in_("status", ["active", "warming"]).limit(1).execute()
+        if not chip_result.data:
+            raise HTTPException(status_code=503, detail="No active chip available")
+        instance_name = chip_result.data[0]["instance_name"]
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as client:
+            wa_resp = await client.post("http://localhost:3001/send", json={"phone": phone, "message": message, "from": instance_name})
+            wa_resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {str(e)}")
+
+    sb.table("messages").insert({
+        "conversation_id": conversation_id,
+        "direction": "outbound",
+        "content": message,
+        "message_type": "manual",
+        "status": "sent",
+    }).execute()
+
+    return {"success": True}
+
+
 # ===== HANDOFFS ENDPOINTS =====
 
 

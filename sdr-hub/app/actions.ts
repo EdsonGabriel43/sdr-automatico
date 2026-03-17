@@ -4,11 +4,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 
 export async function getDashboardMetrics() {
     const { count: totalLeads } = await supabaseAdmin.from('leads').select('*', { count: 'exact', head: true })
-    // Conversas que sairam do pending = foram contatadas
     const { count: contactedLeads } = await supabaseAdmin.from('conversations').select('*', { count: 'exact', head: true }).neq('status', 'pending')
-    // Qualificados = qualified ou handed_off
     const { count: qualifiedLeads } = await supabaseAdmin.from('conversations').select('*', { count: 'exact', head: true }).in('status', ['qualified', 'handed_off'])
-    // Responderam = responded, nurturing, qualified, handed_off
     const { count: respondingLeads } = await supabaseAdmin.from('conversations').select('*', { count: 'exact', head: true }).in('status', ['responded', 'nurturing', 'qualified', 'handed_off'])
     const responseRate = contactedLeads ? ((respondingLeads || 0) / contactedLeads) * 100 : 0
     const { data: recentActivity } = await supabaseAdmin.from('messages').select(`
@@ -18,16 +15,14 @@ export async function getDashboardMetrics() {
 }
 
 export async function getKanbanLeads() {
-    // Kanban baseado em conversations.status (nao em leads.status que nao existe na tabela)
     const { data: conversations } = await supabaseAdmin.from('conversations').select(`
-      id, status, current_step, updated_at, intent_classification,
+      id, status, current_step, follow_up_count, updated_at, intent_classification,
       leads ( id, nome, empresa, telefone, valor_divida, cargo )
     `)
     .not('status', 'eq', 'blocked')
     .order('updated_at', { ascending: false })
     .limit(500)
     const convs = conversations || []
-    // Deduplicar por lead: manter apenas a conversa mais recente
     const seenLeads = new Set<string>()
     const unique = convs.filter((c: any) => {
         const lid = c.leads?.id
@@ -35,12 +30,21 @@ export async function getKanbanLeads() {
         seenLeads.add(lid)
         return true
     })
+    const isGK = (c: any) => c.intent_classification && ['gatekeeper', 'referral'].includes(c.intent_classification)
+    const fup = (c: any) => c.follow_up_count ?? 0
     const columns = {
-        pending:    unique.filter((c: any) => c.status === 'pending'),
-        contacted:  unique.filter((c: any) => c.status === 'contacted'),
-        responded:  unique.filter((c: any) => ['responded', 'nurturing'].includes(c.status)),
-        qualified:  unique.filter((c: any) => c.status === 'qualified'),
-        handed_off: unique.filter((c: any) => ['handed_off', 'not_interested', 'no_response', 'wrong_person'].includes(c.status)),
+        para_contactar:      unique.filter((c: any) => c.status === 'pending'),
+        nao_resp_0:          unique.filter((c: any) => c.status === 'contacted' && fup(c) === 0),
+        nao_resp_1:          unique.filter((c: any) => c.status === 'contacted' && fup(c) === 1),
+        nao_resp_2:          unique.filter((c: any) => c.status === 'contacted' && fup(c) === 2),
+        nao_resp_3:          unique.filter((c: any) => (c.status === 'contacted' && fup(c) >= 3) || c.status === 'no_response'),
+        desqualificado:      unique.filter((c: any) => ['not_interested', 'wrong_person'].includes(c.status)),
+        handoff_humano:      unique.filter((c: any) => c.status === 'handed_off'),
+        em_conversa_gk:      unique.filter((c: any) => ['responded', 'nurturing'].includes(c.status) && isGK(c)),
+        em_conversa_decisor: unique.filter((c: any) => ['responded', 'nurturing'].includes(c.status) && !isGK(c)),
+        reuniao_marcada:     unique.filter((c: any) => c.status === 'meeting_scheduled'),
+        nao_compareceu:      unique.filter((c: any) => c.status === 'meeting_no_show'),
+        em_negociacao:       unique.filter((c: any) => c.status === 'qualified'),
     }
     return columns
 }
@@ -68,10 +72,6 @@ export async function getAllLeads(page = 1, pageSize = 20) {
     return { leads: leads || [], total: count || 0, totalPages: count ? Math.ceil(count / pageSize) : 0 }
 }
 
-// ============================================
-// CONEXAO COM O MOTOR DISPARADOR PYTHON (VPS)
-// ============================================
-
 const DISPATCHER_API_URL = process.env.DISPATCHER_API_URL || 'http://localhost:5000'
 
 export async function importLeadsCsv(formData: FormData) {
@@ -79,9 +79,7 @@ export async function importLeadsCsv(formData: FormData) {
         const response = await fetch(`${DISPATCHER_API_URL}/leads/import`, { method: 'POST', body: formData })
         if (!response.ok) throw new Error(`Erro na API: ${response.statusText}`)
         return { success: true, data: await response.json() }
-    } catch (e: any) {
-        return { success: false, error: e.message }
-    }
+    } catch (e: any) { return { success: false, error: e.message } }
 }
 
 export async function createAndStartCampaign(name: string, description: string, filters: any = null) {
@@ -96,16 +94,10 @@ export async function createAndStartCampaign(name: string, description: string, 
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ campaign_id: campaign.id })
         })
-        if (!startRes.ok) throw new Error("Falha ao iniciar disparo da campanha")
+        if (!startRes.ok) throw new Error("Falha ao iniciar disparo")
         return { success: true, campaign }
-    } catch (error) {
-        return { success: false, error: "Erro interno no servidor." }
-    }
+    } catch (error) { return { success: false, error: "Erro interno." } }
 }
-
-// ============================================
-// TEMPLATES & SETTINGS
-// ============================================
 
 export async function getTemplates() {
     try {
@@ -120,31 +112,22 @@ export async function updateTemplates(data: any) {
         const res = await fetch(`${DISPATCHER_API_URL}/settings/templates`, {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data)
         })
-        if (!res.ok) throw new Error(`Erro API Python: ${await res.text()}`)
+        if (!res.ok) throw new Error(`Erro API: ${await res.text()}`)
         return { success: true }
-    } catch (error: any) {
-        return { success: false, error: error.message }
-    }
+    } catch (error: any) { return { success: false, error: error.message } }
 }
-
-// ============================================
-// CHAT / INBOX / CONVERSATIONS
-// ============================================
 
 export async function getConversations() {
     try {
         const { data, error } = await supabaseAdmin
             .from("conversations")
-            .select(`
-                id, status, intent_classification, next_follow_up_at, updated_at,
-                leads ( id, nome, empresa, telefone, valor_divida )
-            `)
+            .select(`id, status, intent_classification, next_follow_up_at, updated_at, leads ( id, nome, empresa, telefone, valor_divida )`)
             .not('status', 'eq', 'blocked')
             .not('status', 'eq', 'no_response')
             .not('status', 'eq', 'wrong_person')
             .order("updated_at", { ascending: false })
             .limit(200)
-        if (error) { console.error("Erro Supabase getConversations:", error); return [] }
+        if (error) { console.error("Erro getConversations:", error); return [] }
         return data
     } catch (error) { return [] }
 }
@@ -159,6 +142,18 @@ export async function getMessages(conversationId: string) {
         if (error) { return [] }
         return data
     } catch (error) { return [] }
+}
+
+export async function sendManualMessage(conversationId: string, message: string) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/conversations/${conversationId}/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message }),
+        })
+        if (!res.ok) throw new Error(`Erro VPS: ${res.statusText}`)
+        return { success: true }
+    } catch (e: any) { return { success: false, error: e.message } }
 }
 
 export async function getChipsStatus() {
@@ -176,10 +171,6 @@ export async function getCampaigns() {
     } catch (e) { return { success: false, campaigns: [] } }
 }
 
-// ============================================
-// NURTURING — LEADS QUENTES SEM RESPOSTA
-// ============================================
-
 export async function getNurturingLeads() {
     try {
         const { data: convs } = await supabaseAdmin
@@ -188,28 +179,18 @@ export async function getNurturingLeads() {
             .in("status", ["nurturing", "responded", "qualified"])
             .order("updated_at", { ascending: true })
             .limit(100)
-
         if (!convs) return []
-
         const enriched = await Promise.all(
             (convs as any[]).map(async (conv) => {
                 const { data: msgs } = await supabaseAdmin
-                    .from("messages")
-                    .select("content, created_at")
-                    .eq("conversation_id", conv.id)
-                    .eq("direction", "outbound")
-                    .order("created_at", { ascending: false })
-                    .limit(1)
+                    .from("messages").select("content, created_at")
+                    .eq("conversation_id", conv.id).eq("direction", "outbound")
+                    .order("created_at", { ascending: false }).limit(1)
                 const lastMsg = msgs?.[0] ?? null
                 const now = new Date()
                 const lastAt = lastMsg ? new Date(lastMsg.created_at) : new Date(conv.updated_at)
                 const hoursAgo = Math.round((now.getTime() - lastAt.getTime()) / 3600000)
-                return {
-                    ...conv,
-                    last_bot_message: lastMsg?.content?.slice(0, 150) ?? "",
-                    last_bot_at: lastMsg?.created_at ?? conv.updated_at,
-                    hours_waiting: hoursAgo,
-                }
+                return { ...conv, last_bot_message: lastMsg?.content?.slice(0, 150) ?? "", last_bot_at: lastMsg?.created_at ?? conv.updated_at, hours_waiting: hoursAgo }
             })
         )
         return enriched.sort((a: any, b: any) => b.hours_waiting - a.hours_waiting)
@@ -219,8 +200,7 @@ export async function getNurturingLeads() {
 export async function triggerNurturingFollowup(conversationId: string) {
     try {
         const res = await fetch(`${DISPATCHER_API_URL}/followups/nurturing/trigger`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
+            method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ conversation_id: conversationId }),
         })
         if (!res.ok) throw new Error(`Erro VPS: ${res.statusText}`)
@@ -230,9 +210,7 @@ export async function triggerNurturingFollowup(conversationId: string) {
 
 export async function closeNurturingLead(conversationId: string) {
     try {
-        const res = await fetch(`${DISPATCHER_API_URL}/followups/nurturing/close/${conversationId}`, {
-            method: "POST",
-        })
+        const res = await fetch(`${DISPATCHER_API_URL}/followups/nurturing/close/${conversationId}`, { method: "POST" })
         if (!res.ok) throw new Error(`Erro VPS: ${res.statusText}`)
         return { success: true }
     } catch (e: any) { return { success: false, error: e.message } }
