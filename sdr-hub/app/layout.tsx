@@ -1,13 +1,18 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
+import { Plus_Jakarta_Sans } from 'next/font/google'
 import './globals.css'
 import { cn } from '@/lib/utils'
 import { Toaster } from '@/components/ui/toaster'
+import { ThemeProvider } from '@/components/theme-provider'
 
-const inter = Inter({ subsets: ['latin'] })
+const font = Plus_Jakarta_Sans({
+  subsets: ['latin'],
+  weight: ['300', '400', '500', '600', '700', '800'],
+  variable: '--font-sans',
+})
 
 export const metadata: Metadata = {
-  title: 'SDR Hub | Syneos',
+  title: 'SDR Hub',
   description: 'Painel de Controle do SDR Automático',
 }
 
@@ -17,10 +22,17 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="pt-BR" className="dark">
-      <body className={cn(inter.className, "bg-background text-foreground antialiased min-h-screen")}>
-        {children}
-        <Toaster />
+    <html lang="pt-BR" suppressHydrationWarning>
+      <body className={cn(font.variable, "font-sans bg-background text-foreground antialiased min-h-screen")}>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="dark"
+          enableSystem={false}
+          disableTransitionOnChange
+        >
+          {children}
+          <Toaster />
+        </ThemeProvider>
       </body>
     </html>
   )

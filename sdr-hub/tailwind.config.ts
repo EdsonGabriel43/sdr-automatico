@@ -18,6 +18,9 @@ const config = {
             },
         },
         extend: {
+            fontFamily: {
+                sans: ["var(--font-sans)", "system-ui", "sans-serif"],
+            },
             colors: {
                 border: "hsl(var(--border))",
                 input: "hsl(var(--input))",
@@ -52,6 +55,11 @@ const config = {
                     DEFAULT: "hsl(var(--card))",
                     foreground: "hsl(var(--card-foreground))",
                 },
+                sidebar: {
+                    DEFAULT: "hsl(var(--sidebar))",
+                    foreground: "hsl(var(--sidebar-foreground))",
+                    border: "hsl(var(--sidebar-border))",
+                },
             },
             borderRadius: {
                 lg: "var(--radius)",
@@ -75,6 +83,8 @@ const config = {
         },
     },
     plugins: [require("tailwindcss-animate")],
+    // Font family via CSS variable
+
 } satisfies Config
 
 export default config
