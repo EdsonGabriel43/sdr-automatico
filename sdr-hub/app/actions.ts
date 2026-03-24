@@ -236,3 +236,47 @@ export async function getCampaignDetails(campaignId: string) {
         return { campaign, conversations: convs, metrics }
     } catch (error) { return null }
 }
+
+export async function startProspectingSearch(query: string, mode: string, platforms: string[], location: string | null) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/prospecting/search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query, mode, platforms, location }),
+        })
+        if (!res.ok) throw new Error(`Erro API: ${res.statusText}`)
+        return { success: true, data: await res.json() }
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function getProspectingResults(searchId: string) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/prospecting/search/${searchId}`, { cache: 'no-store' })
+        if (!res.ok) throw new Error(`Erro API: ${res.statusText}`)
+        return { success: true, data: await res.json() }
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function enrichProspects(resultIds: string[]) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/prospecting/enrich`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ result_ids: resultIds }),
+        })
+        if (!res.ok) throw new Error(`Erro API: ${res.statusText}`)
+        return { success: true, data: await res.json() }
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function createCampaignFromProspects(searchId: string, resultIds: string[], campaignName: string, campaignDescription: string = "") {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/prospecting/to-campaign`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ search_id: searchId, result_ids: resultIds, campaign_name: campaignName, campaign_description: campaignDescription }),
+        })
+        if (!res.ok) throw new Error(`Erro API: ${res.statusText}`)
+        return { success: true, data: await res.json() }
+    } catch (e: any) { return { success: false, error: e.message } }
+}

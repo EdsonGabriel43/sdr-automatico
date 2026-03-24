@@ -51,6 +51,18 @@ from execution.chip_manager import (
 from supabase import create_client
 from openai import OpenAI
 
+import sys
+import json
+
+# Add parent dir to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from execution.tool_google_search import (
+    search_google, search_places as search_google_places,
+    construct_query, parse_results, parse_places_results,
+    extract_contacts, deep_scrape_page
+)
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
@@ -183,6 +195,22 @@ class AddPhoneRequest(BaseModel):
 
 class StartCampaignRequest(BaseModel):
     campaign_id: str
+
+
+class ProspectingSearchRequest(BaseModel):
+    query: str
+    mode: str = "natural_language"  # "natural_language" or "structured"
+    platforms: list[str] = ["linkedin", "instagram", "google", "google_places"]
+    location: Optional[str] = None
+
+class ProspectingEnrichRequest(BaseModel):
+    result_ids: list[str]
+
+class ProspectingToCampaignRequest(BaseModel):
+    search_id: str
+    result_ids: list[str]
+    campaign_name: str
+    campaign_description: str = ""
 
 
 # ===== WEBHOOK ENDPOINT =====
@@ -543,37 +571,6 @@ async def send_manual_message(conversation_id: str, body: dict):
 # ===== HANDOFFS ENDPOINTS =====
 
 
-@app.post("/conversations/{conversation_id}/trigger-handoff")
-async def trigger_handoff_endpoint(conversation_id: str):
-    """Dispara handoff manualmente para uma conversa qualificada."""
-    from execution.agent_nexa import trigger_handoff, get_supabase as agent_get_supabase
-    sb = get_supabase()
-
-    conv = sb.table("conversations").select("*, leads(*)").eq("id", conversation_id).single().execute()
-    if not conv.data:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-    lead = conv.data.get("leads")
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
-
-    msgs = sb.table("messages").select("direction, content, created_at").eq("conversation_id", conversation_id).order("created_at", ascending=True).limit(20).execute()
-    history = msgs.data or []
-
-    variables = {
-        "nome": lead.get("nome", ""),
-        "empresa": lead.get("empresa", ""),
-        "valor_divida": lead.get("valor_divida", ""),
-        "cnpj": lead.get("cnpj", ""),
-    }
-
-    try:
-        await trigger_handoff(conversation_id, lead, history, variables)
-        return {"success": True, "message": f"Handoff disparado para {lead.get('nome')}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/handoffs")
 async def list_handoffs(status: Optional[str] = None):
     """Lista handoffs."""
@@ -757,6 +754,326 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "service": "SDR WhatsApp - Agente Nexa v1.0",
+    }
+
+
+# ===== PROSPECTING HELPERS =====
+
+
+def generate_search_queries(query: str, platforms: list[str], location: str = None) -> list[dict]:
+    """Uses GPT-4o to generate Google Dork queries from natural language."""
+    platform_sites = {
+        "linkedin": "site:linkedin.com/in",
+        "instagram": "site:instagram.com",
+        "facebook": "site:facebook.com",
+        "twitter": "site:twitter.com",
+        "tiktok": "site:tiktok.com",
+    }
+
+    platform_list = ", ".join(platforms)
+    location_hint = f"\nLocalização: {location}" if location else ""
+
+    prompt = f"""Você é um especialista em prospecção (SDR) e OSINT.
+O usuário quer encontrar leads com o pedido: "{query}"
+Plataformas desejadas: {platform_list}{location_hint}
+
+Gere queries de busca Google Dorking otimizadas.
+
+REGRAS:
+1. Para LinkedIn: use "site:linkedin.com/in"
+2. Para Instagram: use "site:instagram.com"
+3. Para Facebook: use "site:facebook.com"
+4. Para Google genérico: NÃO use site:, busque "email" OR "telefone" OR "contato"
+5. Para Google Maps: gere uma query simples com o tipo de negócio + localização
+6. Inclua termos de contato: ("email" OR "telefone" OR "celular" OR "contato")
+7. Adicione -intitle:vagas -inurl:jobs
+8. Se tem localização, inclua na query
+
+Retorne APENAS JSON no formato:
+{{"queries": [{{"query": "...", "platform": "linkedin"}}, {{"query": "...", "platform": "instagram"}}, ...]}}
+"""
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Generate search queries in JSON format."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+        )
+        content = response.choices[0].message.content
+        data = json.loads(content)
+        return data.get("queries", [])
+    except Exception as e:
+        logger.error(f"Erro GPT query generation: {e}")
+        return []
+
+
+async def run_prospecting_search(search_id: str, query: str, mode: str, platforms: list[str], location: str = None):
+    """Background task: generates queries, searches, parses, stores in Supabase."""
+    import json as json_mod
+    sb = get_supabase()
+
+    try:
+        sb.table("prospect_searches").update({"status": "running"}).eq("id", search_id).execute()
+
+        all_results = []
+        platforms_searched = []
+
+        # Generate queries
+        if mode == "natural_language":
+            generated = generate_search_queries(query, platforms, location)
+        else:
+            # Structured mode: build queries manually
+            generated = []
+            roles = [query]  # Use query as keyword
+            for platform in platforms:
+                if platform == "google_places":
+                    generated.append({"query": f"{query} {location or ''}", "platform": "google_places"})
+                elif platform == "google":
+                    generated.append({"query": construct_query(query, roles, location, "profile", "google"), "platform": "google"})
+                else:
+                    generated.append({"query": construct_query(query, roles, location, "profile", platform), "platform": platform})
+
+        logger.info(f"Prospecting {search_id}: {len(generated)} queries to execute")
+
+        for q_item in generated:
+            q_text = q_item.get("query", "") if isinstance(q_item, dict) else str(q_item)
+            q_platform = q_item.get("platform", "web") if isinstance(q_item, dict) else "web"
+
+            if not q_text:
+                continue
+
+            logger.info(f"Prospecting query [{q_platform}]: {q_text[:100]}")
+
+            try:
+                if q_platform == "google_places":
+                    raw = search_google_places(q_text, country_code="br")
+                    leads = parse_places_results(raw, query, q_text, location_filter=location, enable_deep_scraping=False)
+                else:
+                    raw = search_google(q_text, country_code="br", num_results=20)
+                    leads = parse_results(raw, query, q_text, q_platform, location_filter=location, enable_deep_scraping=False)
+
+                if q_platform not in platforms_searched:
+                    platforms_searched.append(q_platform)
+
+                for lead in leads:
+                    # Calculate priority score
+                    score = 0
+                    phone = lead.get("Phone_Whatsapp", "N/A")
+                    if phone and phone != "N/A":
+                        digits = ''.join(c for c in phone if c.isdigit())
+                        if len(digits) >= 11 and digits[-9] == '9':
+                            score += 1000
+                    if q_platform == "instagram" or "instagram.com" in lead.get("Profile_URL", ""):
+                        score += 100
+                    email = lead.get("Personal_Email", "N/A")
+                    if email and email != "N/A":
+                        score += 10
+
+                    all_results.append({
+                        "search_id": search_id,
+                        "name": lead.get("Name", ""),
+                        "email": email if email != "N/A" else None,
+                        "phone": phone if phone != "N/A" else None,
+                        "role_snippet": lead.get("Role_Snippet", "")[:500],
+                        "company": lead.get("Company_Input", ""),
+                        "profile_url": lead.get("Profile_URL", ""),
+                        "source_platform": q_platform,
+                        "address": lead.get("Role_Snippet", "") if q_platform == "google_places" else None,
+                        "priority_score": score,
+                    })
+            except Exception as e:
+                logger.error(f"Erro na query [{q_platform}]: {e}")
+                continue
+
+        # Deduplicate by profile_url
+        seen_urls = set()
+        unique_results = []
+        for r in all_results:
+            url = r.get("profile_url", "")
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            unique_results.append(r)
+
+        # Insert into Supabase in batches
+        batch_size = 50
+        for i in range(0, len(unique_results), batch_size):
+            batch = unique_results[i:i+batch_size]
+            sb.table("prospect_results").insert(batch).execute()
+
+        # Update search status
+        sb.table("prospect_searches").update({
+            "status": "completed",
+            "total_results": len(unique_results),
+            "platforms_searched": platforms_searched,
+            "completed_at": datetime.utcnow().isoformat(),
+        }).eq("id", search_id).execute()
+
+        logger.info(f"Prospecting {search_id}: completed with {len(unique_results)} results")
+
+    except Exception as e:
+        logger.error(f"Prospecting {search_id} failed: {e}")
+        sb.table("prospect_searches").update({
+            "status": "failed",
+        }).eq("id", search_id).execute()
+
+
+# ===== PROSPECTING ENDPOINTS =====
+
+
+@app.post("/prospecting/search")
+async def start_prospecting_search_endpoint(req: ProspectingSearchRequest, background_tasks: BackgroundTasks):
+    """Inicia uma busca de prospectos em múltiplas plataformas."""
+    sb = get_supabase()
+
+    search = sb.table("prospect_searches").insert({
+        "query_text": req.query,
+        "search_type": req.mode,
+        "filters": {"platforms": req.platforms, "location": req.location},
+        "status": "pending",
+    }).execute()
+
+    search_id = search.data[0]["id"]
+
+    background_tasks.add_task(
+        run_prospecting_search,
+        search_id=search_id,
+        query=req.query,
+        mode=req.mode,
+        platforms=req.platforms,
+        location=req.location,
+    )
+
+    return {"search_id": search_id, "status": "pending"}
+
+
+@app.get("/prospecting/search/{search_id}")
+async def get_prospecting_results_endpoint(search_id: str):
+    """Retorna status e resultados de uma busca de prospecção."""
+    sb = get_supabase()
+
+    search = sb.table("prospect_searches").select("*").eq("id", search_id).single().execute()
+    if not search.data:
+        raise HTTPException(status_code=404, detail="Search not found")
+
+    results = sb.table("prospect_results").select("*").eq("search_id", search_id).order("priority_score", desc=True).execute()
+
+    return {
+        "search": search.data,
+        "results": results.data or [],
+    }
+
+
+@app.post("/prospecting/enrich")
+async def enrich_prospects_endpoint(req: ProspectingEnrichRequest, background_tasks: BackgroundTasks):
+    """Enriquece prospectos selecionados com dados de WhatsApp e email."""
+    sb = get_supabase()
+    enriched = 0
+
+    for result_id in req.result_ids:
+        try:
+            result = sb.table("prospect_results").select("*").eq("id", result_id).single().execute()
+            if not result.data:
+                continue
+
+            prospect = result.data
+            updates = {}
+
+            # If has CNPJ, try to get phone from BrasilAPI
+            if prospect.get("cnpj") and not prospect.get("phone"):
+                try:
+                    from pgfn_module.whatsapp_finder import get_phones_from_brasilapi
+                    phones = get_phones_from_brasilapi(prospect["cnpj"])
+                    if phones:
+                        updates["phone"] = phones[0]
+                except Exception:
+                    pass
+
+            # Check WhatsApp status
+            if prospect.get("phone") or updates.get("phone"):
+                phone = updates.get("phone") or prospect["phone"]
+                try:
+                    from pgfn_module.whatsapp_finder import check_whatsapp
+                    wa_status = check_whatsapp(phone)
+                    updates["whatsapp_status"] = wa_status.get("status", "unknown")
+                except Exception:
+                    updates["whatsapp_status"] = "unknown"
+
+            if updates:
+                # Recalculate priority score
+                phone = updates.get("phone") or prospect.get("phone")
+                score = prospect.get("priority_score", 0)
+                if phone:
+                    digits = ''.join(c for c in phone if c.isdigit())
+                    if len(digits) >= 11:
+                        score = max(score, 1000)
+                if updates.get("whatsapp_status") == "confirmed":
+                    score += 500
+                updates["priority_score"] = score
+
+                sb.table("prospect_results").update(updates).eq("id", result_id).execute()
+                enriched += 1
+
+        except Exception as e:
+            logger.error(f"Erro enriching {result_id}: {e}")
+            continue
+
+    return {"enriched": enriched, "total": len(req.result_ids)}
+
+
+@app.post("/prospecting/to-campaign")
+async def prospects_to_campaign_endpoint(req: ProspectingToCampaignRequest, background_tasks: BackgroundTasks):
+    """Converte prospectos selecionados em leads e cria uma campanha."""
+    sb = get_supabase()
+
+    # Fetch selected prospects
+    results = sb.table("prospect_results").select("*").in_("id", req.result_ids).execute()
+    if not results.data:
+        raise HTTPException(status_code=400, detail="No prospects found")
+
+    # Convert to leads
+    lead_ids = []
+    for prospect in results.data:
+        lead_data = {
+            "nome": prospect.get("name", ""),
+            "empresa": prospect.get("company", ""),
+            "telefone": prospect.get("phone"),
+            "cargo": prospect.get("role_snippet", "")[:200],
+            "linkedin": prospect.get("profile_url") if "linkedin" in (prospect.get("source_platform") or "") else None,
+        }
+
+        # Skip if no phone (can't send WhatsApp)
+        if not lead_data["telefone"]:
+            continue
+
+        # Check if lead already exists by phone
+        existing = sb.table("leads").select("id").eq("telefone", lead_data["telefone"]).execute()
+        if existing.data:
+            lead_ids.append(existing.data[0]["id"])
+        else:
+            new_lead = sb.table("leads").insert(lead_data).execute()
+            if new_lead.data:
+                lead_ids.append(new_lead.data[0]["id"])
+
+    if not lead_ids:
+        raise HTTPException(status_code=400, detail="No prospects with phone numbers found")
+
+    # Create campaign
+    campaign = create_campaign(
+        name=req.campaign_name,
+        description=req.campaign_description,
+        lead_ids=lead_ids,
+    )
+
+    return {
+        "status": "created",
+        "campaign": campaign,
+        "leads_imported": len(lead_ids),
     }
 
 

@@ -13,6 +13,7 @@ import {
     Flame,
     Target,
     BarChart3,
+    Search,
 } from "lucide-react"
 
 interface SidebarProps extends React.HTMLAttributes<HTMLDivElement> { }
@@ -24,6 +25,7 @@ const routes = [
     { label: "Leads", icon: Users, href: "/leads" },
     { label: "Campanhas", icon: Megaphone, href: "/campaigns" },
     { label: "Nurturing", icon: Flame, href: "/nurturing" },
+    { label: "Prospectar", icon: Search, href: "/prospecting" },
     { label: "Configurações", icon: Settings, href: "/settings" },
 ]
 
