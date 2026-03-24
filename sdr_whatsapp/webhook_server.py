@@ -54,14 +54,41 @@ from openai import OpenAI
 import sys
 import json
 
-# Add parent dir to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Prospecting imports — loaded lazily to avoid crash if modules not present
+_prospecting_imports_loaded = False
+search_google = None
+search_google_places = None
+construct_query = None
+parse_results = None
+parse_places_results = None
+extract_contacts = None
+deep_scrape_page = None
 
-from execution.tool_google_search import (
-    search_google, search_places as search_google_places,
-    construct_query, parse_results, parse_places_results,
-    extract_contacts, deep_scrape_page
-)
+def _load_prospecting_modules():
+    global _prospecting_imports_loaded, search_google, search_google_places
+    global construct_query, parse_results, parse_places_results, extract_contacts, deep_scrape_page
+    if _prospecting_imports_loaded:
+        return True
+    try:
+        from prospecting.tool_google_search import (
+            search_google as _sg, search_places as _sp,
+            construct_query as _cq, parse_results as _pr,
+            parse_places_results as _ppr, extract_contacts as _ec,
+            deep_scrape_page as _dsp
+        )
+        search_google = _sg
+        search_google_places = _sp
+        construct_query = _cq
+        parse_results = _pr
+        parse_places_results = _ppr
+        extract_contacts = _ec
+        deep_scrape_page = _dsp
+        _prospecting_imports_loaded = True
+        logger.info("Prospecting modules loaded successfully")
+        return True
+    except Exception as e:
+        logger.warning(f"Prospecting modules not available: {e}")
+        return False
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
@@ -813,10 +840,14 @@ Retorne APENAS JSON no formato:
 
 async def run_prospecting_search(search_id: str, query: str, mode: str, platforms: list[str], location: str = None):
     """Background task: generates queries, searches, parses, stores in Supabase."""
-    import json as json_mod
     sb = get_supabase()
 
     try:
+        if not _load_prospecting_modules():
+            sb.table("prospect_searches").update({"status": "failed"}).eq("id", search_id).execute()
+            logger.error(f"Prospecting {search_id}: modules not available")
+            return
+
         sb.table("prospect_searches").update({"status": "running"}).eq("id", search_id).execute()
 
         all_results = []
