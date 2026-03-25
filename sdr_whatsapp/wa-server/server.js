@@ -17,9 +17,10 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL || 'http://localhost:5000/webhook';
 // Estado global
 let connectionStatus = 'disconnected'; // disconnected | qr | connected
 let lastQR = null;
+let intentionalDisconnect = false;
 
 // ===== CLIENTE WHATSAPP =====
-const client = new Client({
+let client = new Client({
     authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
     puppeteer: {
         headless: true,
@@ -63,6 +64,11 @@ client.on('ready', () => {
 client.on('disconnected', (reason) => {
     connectionStatus = 'disconnected';
     console.log('❌ WhatsApp desconectado:', reason);
+    if (intentionalDisconnect) {
+        console.log('   ↳ Desconexão intencional, sem auto-reconnect');
+        intentionalDisconnect = false;
+        return;
+    }
     // Tentar reconectar após 10 segundos
     setTimeout(() => {
         console.log('🔄 Tentando reconectar...');
@@ -389,6 +395,124 @@ app.post('/send/poll', async (req, res) => {
     } catch (err) {
         console.error('❌ Erro ao enviar enquete:', err.message);
         console.error('Stack:', err.stack);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// QR como JSON (para o Hub renderizar)
+app.get('/qr/json', (req, res) => {
+    res.json({
+        status: connectionStatus,
+        qr: lastQR || null,
+        number: client.info?.wid?.user || null,
+        name: client.info?.pushname || null,
+    });
+});
+
+// Desconectar WhatsApp
+app.post('/disconnect', async (req, res) => {
+    try {
+        intentionalDisconnect = true;
+        const clearAuth = req.query.clear_auth === 'true';
+
+        try { await client.logout(); } catch (e) { console.log('logout skip:', e.message); }
+        try { await client.destroy(); } catch (e) { console.log('destroy skip:', e.message); }
+
+        connectionStatus = 'disconnected';
+        lastQR = null;
+
+        if (clearAuth) {
+            const fs = require('fs');
+            const path = require('path');
+            const authDir = path.join(__dirname, '.wwebjs_auth');
+            if (fs.existsSync(authDir)) {
+                fs.rmSync(authDir, { recursive: true, force: true });
+                console.log('🗑️ Auth data cleared for phone swap');
+            }
+        }
+
+        console.log('🔌 WhatsApp desconectado via API');
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Erro ao desconectar:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Reconectar (cria novo client e inicializa)
+app.post('/reconnect', async (req, res) => {
+    try {
+        intentionalDisconnect = false;
+        connectionStatus = 'disconnected';
+        lastQR = null;
+
+        // Criar novo client
+        client = new Client({
+            authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
+            puppeteer: {
+                headless: true,
+                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--disable-gpu'],
+            },
+        });
+
+        // Re-registrar todos os event handlers
+        client.on('qr', (qr) => {
+            lastQR = qr;
+            connectionStatus = 'qr';
+            console.log('📱 Novo QR code gerado');
+        });
+
+        client.on('ready', () => {
+            connectionStatus = 'connected';
+            lastQR = null;
+            console.log(`✅ Reconectado: ${client.info?.wid?.user || 'N/A'}`);
+        });
+
+        client.on('disconnected', (reason) => {
+            connectionStatus = 'disconnected';
+            console.log('❌ Desconectado:', reason);
+            if (!intentionalDisconnect) {
+                setTimeout(() => { console.log('🔄 Reconectando...'); client.initialize(); }, 10000);
+            }
+            intentionalDisconnect = false;
+        });
+
+        client.on('auth_failure', (msg) => {
+            connectionStatus = 'auth_failure';
+            console.error('❌ Auth failure:', msg);
+        });
+
+        // Re-registrar message handler
+        client.on('message', async (msg) => {
+            if (msg.from.includes('@g.us') || msg.from === 'status@broadcast' || msg.fromMe) return;
+            let phone = msg.from;
+            if (phone.includes('@c.us')) phone = phone.replace('@c.us', '');
+            else if (phone.includes('@lid')) {
+                try { const c = await msg.getContact(); phone = c.number || c.id?.user || phone.replace('@lid', ''); } catch (e) { phone = phone.replace('@lid', ''); }
+            } else phone = phone.replace(/@.*$/, '');
+
+            const payload = { event: 'messages.upsert', data: { key: { remoteJid: msg.from, fromMe: false, id: msg.id._serialized }, message: { conversation: msg.body }, phone, instanceName: 'wa-server', messageType: msg.type } };
+
+            if (msg.type === 'ptt' || msg.type === 'audio') {
+                try { const media = await msg.downloadMedia(); if (media?.data) { payload.data.audio_base64 = media.data; payload.data.audio_mimetype = media.mimetype || 'audio/ogg'; } } catch (e) {}
+            }
+
+            try { await fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); } catch (e) {}
+        });
+
+        client.on('vote_update', async (vote) => {
+            const phone = vote.voter.replace('@c.us', '').replace('@lid', '');
+            const opt = vote.selectedOptions?.[0]?.name || '';
+            if (!opt) return;
+            const payload = { event: 'messages.upsert', data: { key: { remoteJid: vote.voter, fromMe: false, id: `poll_vote_${Date.now()}` }, message: { conversation: opt }, phone, instanceName: 'wa-server', isPollVote: true } };
+            try { await fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); } catch (e) {}
+        });
+
+        client.initialize();
+        console.log('🔄 Reconectando, QR disponível em breve...');
+        res.json({ success: true, message: 'Reconnecting, QR will be available shortly' });
+    } catch (err) {
+        console.error('Erro ao reconectar:', err.message);
         res.status(500).json({ error: err.message });
     }
 });

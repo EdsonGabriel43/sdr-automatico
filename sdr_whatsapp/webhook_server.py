@@ -407,6 +407,90 @@ async def chip_status(instance_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/chips/qr-data")
+async def get_chip_qr_data():
+    """Retorna QR code como JSON para o Hub renderizar."""
+    wa_server_url = os.getenv("WA_SERVER_URL", "http://localhost:3001")
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{wa_server_url}/qr/json")
+            return resp.json()
+    except Exception as e:
+        return {"status": "error", "qr": None, "number": None, "name": None, "error": str(e)}
+
+
+@app.post("/chips/{chip_id}/disconnect")
+async def disconnect_chip(chip_id: str, clear_auth: bool = False):
+    """Desconecta um chip do WhatsApp."""
+    wa_server_url = os.getenv("WA_SERVER_URL", "http://localhost:3001")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(f"{wa_server_url}/disconnect", params={"clear_auth": str(clear_auth).lower()})
+            if resp.status_code == 200:
+                update_chip_status(chip_id, "disconnected")
+                return {"success": True}
+            return {"success": False, "error": resp.text}
+    except Exception as e:
+        update_chip_status(chip_id, "disconnected")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/chips/{chip_id}/reconnect")
+async def reconnect_chip(chip_id: str):
+    """Reconecta um chip (gera novo QR)."""
+    wa_server_url = os.getenv("WA_SERVER_URL", "http://localhost:3001")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(f"{wa_server_url}/reconnect")
+            if resp.status_code == 200:
+                update_chip_status(chip_id, "warming")
+                return {"success": True}
+            return {"success": False, "error": resp.text}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/chips/{chip_id}/swap")
+async def swap_chip(chip_id: str):
+    """Troca o número do chip: desconecta com clear_auth + reconecta."""
+    wa_server_url = os.getenv("WA_SERVER_URL", "http://localhost:3001")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Disconnect with clear_auth to remove session
+            await client.post(f"{wa_server_url}/disconnect", params={"clear_auth": "true"})
+            await asyncio.sleep(2)
+            # Reconnect — will generate fresh QR for new number
+            resp = await client.post(f"{wa_server_url}/reconnect")
+
+        # Reset chip in Supabase
+        sb = get_supabase()
+        sb.table("chips").update({
+            "phone_number": None,
+            "status": "warming",
+            "warming_start_date": datetime.now().date().isoformat(),
+            "warming_day": 0,
+            "daily_limit": 5,
+            "messages_sent_today": 0,
+        }).eq("id", chip_id).execute()
+
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+class UpdateChipStatusRequest(BaseModel):
+    status: str  # "paused" | "active"
+
+
+@app.patch("/chips/{chip_id}/status")
+async def update_chip_status_endpoint(chip_id: str, req: UpdateChipStatusRequest):
+    """Atualiza status de um chip (pausar/retomar)."""
+    if req.status not in ["paused", "active", "warming"]:
+        raise HTTPException(status_code=400, detail="Status inválido")
+    update_chip_status(chip_id, req.status)
+    return {"success": True}
+
+
 # ===== LEADS ENDPOINTS =====
 
 

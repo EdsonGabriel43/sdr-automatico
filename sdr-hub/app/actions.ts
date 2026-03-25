@@ -164,6 +164,57 @@ export async function getChipsStatus() {
     } catch (e) { return { success: false } }
 }
 
+export async function getChipQRData() {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/chips/qr-data`, { cache: 'no-store' })
+        if (!res.ok) return { status: 'error', qr: null, number: null, name: null }
+        return await res.json()
+    } catch (e) { return { status: 'error', qr: null, number: null, name: null } }
+}
+
+export async function disconnectChip(chipId: string) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/chips/${chipId}/disconnect`, { method: 'POST' })
+        return await res.json()
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function reconnectChip(chipId: string) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/chips/${chipId}/reconnect`, { method: 'POST' })
+        return await res.json()
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function swapChip(chipId: string) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/chips/${chipId}/swap`, { method: 'POST' })
+        return await res.json()
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function updateChipStatusAction(chipId: string, status: string) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/chips/${chipId}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status }),
+        })
+        return await res.json()
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function createChipAction(instanceName: string, phoneNumber?: string) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/chips/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ instance_name: instanceName, phone_number: phoneNumber || '' }),
+        })
+        return { success: true, data: await res.json() }
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
 export async function getCampaigns() {
     try {
         const { data: campaigns } = await supabaseAdmin.from('campaigns').select('*').order('created_at', { ascending: false })
