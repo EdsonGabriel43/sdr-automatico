@@ -251,9 +251,20 @@ export async function startProspectingSearch(query: string, mode: string, platfo
 
 export async function getProspectingResults(searchId: string) {
     try {
-        const res = await fetch(`${DISPATCHER_API_URL}/prospecting/search/${searchId}`, { cache: 'no-store' })
-        if (!res.ok) throw new Error(`Erro API: ${res.statusText}`)
-        return { success: true, data: await res.json() }
+        const { data: search } = await supabaseAdmin
+            .from('prospect_searches')
+            .select('*')
+            .eq('id', searchId)
+            .single()
+        if (!search) return { success: false, error: 'Search not found' }
+
+        const { data: results } = await supabaseAdmin
+            .from('prospect_results')
+            .select('*')
+            .eq('search_id', searchId)
+            .order('priority_score', { ascending: false })
+
+        return { success: true, data: { search, results: results || [] } }
     } catch (e: any) { return { success: false, error: e.message } }
 }
 

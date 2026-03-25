@@ -58,23 +58,45 @@ export default function ProspectingPage() {
     useEffect(() => {
         if (!searchId || searchStatus === "completed" || searchStatus === "failed") return
 
-        const interval = setInterval(async () => {
-            const res = await getProspectingResults(searchId)
-            if (res.success && res.data) {
-                setResults(res.data.results || [])
-                setSearchStatus(res.data.search?.status)
+        let active = true
+        const poll = async () => {
+            while (active) {
+                await new Promise(r => setTimeout(r, 2500))
+                if (!active) break
+                try {
+                    const res = await getProspectingResults(searchId)
+                    console.log("[Prospecting] Poll response:", JSON.stringify(res).slice(0, 300))
+                    if (res.success && res.data) {
+                        const newResults = res.data.results || []
+                        const newStatus = res.data.search?.status || "running"
 
-                if (res.data.search?.status === "completed") {
-                    setIsSearching(false)
-                    toast.success(`${res.data.results?.length || 0} prospectos encontrados!`)
-                } else if (res.data.search?.status === "failed") {
-                    setIsSearching(false)
-                    toast.error("Erro na busca. Tente novamente.")
+                        if (newResults.length > 0) {
+                            setResults(newResults)
+                        }
+
+                        if (newStatus === "completed") {
+                            setResults(newResults)
+                            setSearchStatus("completed")
+                            setIsSearching(false)
+                            toast.success(`${newResults.length} prospectos encontrados!`)
+                            break
+                        } else if (newStatus === "failed") {
+                            setSearchStatus("failed")
+                            setIsSearching(false)
+                            toast.error("Erro na busca. Tente novamente.")
+                            break
+                        }
+                    } else {
+                        console.warn("[Prospecting] Poll failed:", res.error)
+                    }
+                } catch (e) {
+                    console.error("[Prospecting] Poll error:", e)
                 }
             }
-        }, 2000)
+        }
+        poll()
 
-        return () => clearInterval(interval)
+        return () => { active = false }
     }, [searchId, searchStatus])
 
     const handleSearch = async () => {
