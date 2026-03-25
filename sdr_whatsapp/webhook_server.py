@@ -229,6 +229,7 @@ class ProspectingSearchRequest(BaseModel):
     mode: str = "natural_language"  # "natural_language" or "structured"
     platforms: list[str] = ["linkedin", "instagram", "google", "google_places"]
     location: Optional[str] = None
+    enable_deep_scraping: bool = False
 
 class ProspectingEnrichRequest(BaseModel):
     result_ids: list[str]
@@ -838,7 +839,7 @@ Retorne APENAS JSON no formato:
         return []
 
 
-async def run_prospecting_search(search_id: str, query: str, mode: str, platforms: list[str], location: str = None):
+async def run_prospecting_search(search_id: str, query: str, mode: str, platforms: list[str], location: str = None, enable_deep_scraping: bool = False):
     """Background task: generates queries, searches, parses, stores in Supabase."""
     sb = get_supabase()
 
@@ -882,10 +883,10 @@ async def run_prospecting_search(search_id: str, query: str, mode: str, platform
             try:
                 if q_platform == "google_places":
                     raw = search_google_places(q_text, country_code="br")
-                    leads = parse_places_results(raw, query, q_text, location_filter=location, enable_deep_scraping=False)
+                    leads = parse_places_results(raw, query, q_text, location_filter=location, enable_deep_scraping=enable_deep_scraping)
                 else:
                     raw = search_google(q_text, country_code="br", num_results=20)
-                    leads = parse_results(raw, query, q_text, q_platform, location_filter=location, enable_deep_scraping=False)
+                    leads = parse_results(raw, query, q_text, q_platform, location_filter=location, enable_deep_scraping=enable_deep_scraping)
 
                 if q_platform not in platforms_searched:
                     platforms_searched.append(q_platform)
@@ -978,6 +979,7 @@ async def start_prospecting_search_endpoint(req: ProspectingSearchRequest, backg
         mode=req.mode,
         platforms=req.platforms,
         location=req.location,
+        enable_deep_scraping=req.enable_deep_scraping,
     )
 
     return {"search_id": search_id, "status": "pending"}
@@ -1015,23 +1017,54 @@ async def enrich_prospects_endpoint(req: ProspectingEnrichRequest, background_ta
             prospect = result.data
             updates = {}
 
-            # If has CNPJ, try to get phone from BrasilAPI
-            if prospect.get("cnpj") and not prospect.get("phone"):
+            # CNPJ Enrichment via BrasilAPI
+            if prospect.get("cnpj"):
                 try:
-                    from pgfn_module.whatsapp_finder import get_phones_from_brasilapi
-                    phones = get_phones_from_brasilapi(prospect["cnpj"])
-                    if phones:
-                        updates["phone"] = phones[0]
-                except Exception:
-                    pass
+                    import re as _re
+                    import time as _time
+                    cnpj_clean = _re.sub(r'\D', '', prospect["cnpj"]).zfill(14)
+                    import httpx as _httpx
+                    resp = _httpx.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_clean}", timeout=10)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        updates["cnpj_data"] = {
+                            "razao_social": data.get("razao_social"),
+                            "nome_fantasia": data.get("nome_fantasia"),
+                            "cnae_fiscal": data.get("cnae_fiscal"),
+                            "cnae_fiscal_descricao": data.get("cnae_fiscal_descricao"),
+                            "qsa": data.get("qsa", []),
+                            "logradouro": data.get("logradouro"),
+                            "municipio": data.get("municipio"),
+                            "uf": data.get("uf"),
+                            "cep": data.get("cep"),
+                            "capital_social": data.get("capital_social"),
+                            "porte": data.get("porte"),
+                            "situacao_cadastral": data.get("situacao_cadastral"),
+                            "descricao_situacao_cadastral": data.get("descricao_situacao_cadastral"),
+                        }
+                        # Extract phone from CNPJ data if missing
+                        if not prospect.get("phone"):
+                            ddd1 = str(data.get("ddd_telefone_1", ""))
+                            if ddd1:
+                                digits = _re.sub(r'\D', '', ddd1)
+                                if len(digits) >= 10:
+                                    updates["phone"] = digits
+                    _time.sleep(0.5)  # Rate limit BrasilAPI
+                except Exception as e:
+                    logger.warning(f"CNPJ enrichment failed for {prospect.get('cnpj')}: {e}")
 
             # Check WhatsApp status
             if prospect.get("phone") or updates.get("phone"):
                 phone = updates.get("phone") or prospect["phone"]
                 try:
                     from pgfn_module.whatsapp_finder import check_whatsapp
-                    wa_status = check_whatsapp(phone)
-                    updates["whatsapp_status"] = wa_status.get("status", "unknown")
+                    wa_result = check_whatsapp(phone)
+                    if isinstance(wa_result, dict):
+                        updates["whatsapp_status"] = "confirmed" if wa_result.get("has_whatsapp") else "not_whatsapp"
+                    elif wa_result:
+                        updates["whatsapp_status"] = "confirmed"
+                    else:
+                        updates["whatsapp_status"] = "not_whatsapp"
                 except Exception:
                     updates["whatsapp_status"] = "unknown"
 

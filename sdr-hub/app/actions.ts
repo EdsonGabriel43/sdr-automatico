@@ -237,12 +237,12 @@ export async function getCampaignDetails(campaignId: string) {
     } catch (error) { return null }
 }
 
-export async function startProspectingSearch(query: string, mode: string, platforms: string[], location: string | null) {
+export async function startProspectingSearch(query: string, mode: string, platforms: string[], location: string | null, enableDeepScraping: boolean = false) {
     try {
         const res = await fetch(`${DISPATCHER_API_URL}/prospecting/search`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query, mode, platforms, location }),
+            body: JSON.stringify({ query, mode, platforms, location, enable_deep_scraping: enableDeepScraping }),
         })
         if (!res.ok) throw new Error(`Erro API: ${res.statusText}`)
         return { success: true, data: await res.json() }
