@@ -291,3 +291,46 @@ export async function createCampaignFromProspects(searchId: string, resultIds: s
         return { success: true, data: await res.json() }
     } catch (e: any) { return { success: false, error: e.message } }
 }
+
+// --- Saved Searches ---
+
+export async function listSavedSearches() {
+    try {
+        const { data } = await supabaseAdmin
+            .from('prospect_searches')
+            .select('*')
+            .in('status', ['completed', 'failed'])
+            .order('created_at', { ascending: false })
+            .limit(50)
+        return { success: true, data: data || [] }
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function renameSearch(searchId: string, newName: string) {
+    try {
+        await supabaseAdmin.from('prospect_searches').update({ query_text: newName }).eq('id', searchId)
+        return { success: true }
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function deleteSearch(searchId: string) {
+    try {
+        await supabaseAdmin.from('prospect_results').delete().eq('search_id', searchId)
+        await supabaseAdmin.from('prospect_searches').delete().eq('id', searchId)
+        return { success: true }
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function deleteProspectResult(resultId: string) {
+    try {
+        await supabaseAdmin.from('prospect_results').delete().eq('id', resultId)
+        return { success: true }
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function updateProspectResult(resultId: string, updates: Record<string, any>) {
+    try {
+        await supabaseAdmin.from('prospect_results').update(updates).eq('id', resultId)
+        return { success: true }
+    } catch (e: any) { return { success: false, error: e.message } }
+}
