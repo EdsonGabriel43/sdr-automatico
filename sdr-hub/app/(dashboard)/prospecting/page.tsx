@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, Fragment } from "react"
 import { useRouter } from "next/navigation"
 import { Search, Loader2, Phone, Mail, Globe, CheckSquare, Sparkles, Zap, X, Filter, ArrowUpDown, Info, MessageCircle } from "lucide-react"
 import { toast } from "sonner"
@@ -130,6 +130,7 @@ export default function ProspectingPage() {
         if (!query.trim()) { toast.error("Digite uma busca"); return }
 
         setIsSearching(true)
+        setSearchId(null)
         setResults([])
         setSelectedIds(new Set())
         setSearchStatus("pending")
@@ -450,9 +451,8 @@ export default function ProspectingPage() {
                                 </thead>
                                 <tbody>
                                     {filteredResults.map((r) => (
-                                        <>
+                                        <Fragment key={r.id}>
                                             <tr
-                                                key={r.id}
                                                 onClick={() => toggleSelect(r.id)}
                                                 className={`border-b border-border/50 cursor-pointer transition-colors ${
                                                     selectedIds.has(r.id) ? "bg-primary/5" : "hover:bg-secondary/30"
@@ -561,7 +561,7 @@ export default function ProspectingPage() {
                                                     </td>
                                                 </tr>
                                             )}
-                                        </>
+                                        </Fragment>
                                     ))}
                                 </tbody>
                             </table>
