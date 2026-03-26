@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
-import { createServerSupabaseClient } from './supabase-clients'
+import { createServerSupabaseClient } from './supabase-server'
 import { supabaseAdmin } from './supabase-admin'
 
 export type UserRole = 'admin' | 'operator' | 'closer'
