@@ -1,8 +1,10 @@
 "use client"
 
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
+import { createBrowserSupabaseClient } from "@/lib/supabase-clients"
+import { canAccess, type UserProfile } from "@/lib/auth"
 import {
     LayoutDashboard,
     MessageSquare,
@@ -17,8 +19,6 @@ import {
     Smartphone,
 } from "lucide-react"
 
-interface SidebarProps extends React.HTMLAttributes<HTMLDivElement> { }
-
 const routes = [
     { label: "Dashboard", icon: LayoutDashboard, href: "/", exact: true },
     { label: "Pipeline", icon: BarChart3, href: "/kanban" },
@@ -31,13 +31,28 @@ const routes = [
     { label: "Configurações", icon: Settings, href: "/settings" },
 ]
 
-export function Sidebar({ className }: SidebarProps) {
+interface SidebarProps extends React.HTMLAttributes<HTMLDivElement> {
+    userProfile?: UserProfile
+}
+
+export function Sidebar({ className, userProfile }: SidebarProps) {
     const pathname = usePathname()
+    const router = useRouter()
 
     const isActive = (href: string, exact?: boolean) => {
         if (exact) return pathname === href
         return pathname === href || pathname.startsWith(href + "/")
     }
+
+    const handleLogout = async () => {
+        const supabase = createBrowserSupabaseClient()
+        await supabase.auth.signOut()
+        router.push("/login")
+    }
+
+    const visibleRoutes = userProfile
+        ? routes.filter(r => canAccess(userProfile.role, r.href))
+        : routes
 
     return (
         <div className={cn("flex flex-col h-full border-r border-sidebar-border bg-sidebar", className)}>
@@ -55,7 +70,7 @@ export function Sidebar({ className }: SidebarProps) {
             {/* Navigation */}
             <nav className="flex-1 px-3 py-5 space-y-0.5 overflow-y-auto">
                 <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Menu</p>
-                {routes.map((route) => {
+                {visibleRoutes.map((route) => {
                     const active = isActive(route.href, route.exact)
                     return (
                         <Link
@@ -81,7 +96,10 @@ export function Sidebar({ className }: SidebarProps) {
 
             {/* Footer */}
             <div className="px-3 py-4 border-t border-sidebar-border shrink-0">
-                <button className="flex w-full items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-all duration-150">
+                <button
+                    onClick={handleLogout}
+                    className="flex w-full items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-all duration-150"
+                >
                     <LogOut className="h-4 w-4 shrink-0" />
                     Sair
                 </button>

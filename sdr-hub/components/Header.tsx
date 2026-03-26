@@ -4,6 +4,7 @@ import { useTheme } from "next-themes"
 import { usePathname } from "next/navigation"
 import { Sun, Moon, Bell } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import type { UserProfile } from "@/lib/auth"
 
 const pageTitles: Record<string, string> = {
     "/": "Dashboard",
@@ -12,16 +13,28 @@ const pageTitles: Record<string, string> = {
     "/leads": "Leads",
     "/campaigns": "Campanhas",
     "/nurturing": "Nurturing",
+    "/prospecting": "Prospectar",
+    "/chips": "WhatsApp",
     "/settings": "Configurações",
 }
 
-export function Header() {
+export function Header({ userProfile }: { userProfile?: UserProfile }) {
     const { theme, setTheme } = useTheme()
     const pathname = usePathname()
 
     const title = Object.entries(pageTitles).find(([key]) =>
         key === "/" ? pathname === "/" : pathname.startsWith(key)
     )?.[1] ?? "SDR Hub"
+
+    const userName = userProfile?.name || "Usuário"
+    const userRole = userProfile?.role || "admin"
+    const initials = userName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()
+
+    const roleLabels: Record<string, string> = {
+        admin: "Administrador",
+        operator: "Operador",
+        closer: "Closer",
+    }
 
     return (
         <div className="glass flex h-16 items-center border-b px-6 shrink-0">
@@ -50,11 +63,11 @@ export function Header() {
 
                     <div className="flex items-center gap-2.5 pl-3 ml-1 border-l border-border">
                         <div className="h-8 w-8 rounded-full bg-primary/15 border border-primary/30 flex items-center justify-center">
-                            <span className="text-[11px] font-bold text-primary">AD</span>
+                            <span className="text-[11px] font-bold text-primary">{initials}</span>
                         </div>
                         <div className="hidden sm:flex flex-col leading-none">
-                            <span className="text-xs font-semibold text-foreground">Admin</span>
-                            <span className="text-[10px] text-muted-foreground">SDR Hub</span>
+                            <span className="text-xs font-semibold text-foreground">{userName}</span>
+                            <span className="text-[10px] text-muted-foreground">{roleLabels[userRole] || userRole}</span>
                         </div>
                     </div>
                 </div>

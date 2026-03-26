@@ -1,12 +1,20 @@
 "use server"
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireAuth } from "@/lib/auth"
+
+// Helper: get tenant_id from authenticated user
+async function getTenantId() {
+    const { profile } = await requireAuth()
+    return profile.tenant_id
+}
 
 export async function getDashboardMetrics() {
-    const { count: totalLeads } = await supabaseAdmin.from('leads').select('*', { count: 'exact', head: true })
-    const { count: contactedLeads } = await supabaseAdmin.from('conversations').select('*', { count: 'exact', head: true }).neq('status', 'pending')
-    const { count: qualifiedLeads } = await supabaseAdmin.from('conversations').select('*', { count: 'exact', head: true }).in('status', ['qualified', 'handed_off'])
-    const { count: respondingLeads } = await supabaseAdmin.from('conversations').select('*', { count: 'exact', head: true }).in('status', ['responded', 'nurturing', 'qualified', 'handed_off'])
+    const tid = await getTenantId()
+    const { count: totalLeads } = await supabaseAdmin.from('leads').select('*', { count: 'exact', head: true }).eq('tenant_id', tid)
+    const { count: contactedLeads } = await supabaseAdmin.from('conversations').select('*', { count: 'exact', head: true }).eq('tenant_id', tid).neq('status', 'pending')
+    const { count: qualifiedLeads } = await supabaseAdmin.from('conversations').select('*', { count: 'exact', head: true }).eq('tenant_id', tid).in('status', ['qualified', 'handed_off'])
+    const { count: respondingLeads } = await supabaseAdmin.from('conversations').select('*', { count: 'exact', head: true }).eq('tenant_id', tid).in('status', ['responded', 'nurturing', 'qualified', 'handed_off'])
     const responseRate = contactedLeads ? ((respondingLeads || 0) / contactedLeads) * 100 : 0
     const { data: recentActivity } = await supabaseAdmin.from('messages').select(`
       id, content, created_at, conversation_id, conversations ( leads (nome, empresa) )
@@ -15,10 +23,12 @@ export async function getDashboardMetrics() {
 }
 
 export async function getKanbanLeads() {
+    const tid = await getTenantId()
     const { data: conversations } = await supabaseAdmin.from('conversations').select(`
       id, status, current_step, follow_up_count, updated_at, intent_classification,
       leads ( id, nome, empresa, telefone, valor_divida, cargo )
     `)
+    .eq('tenant_id', tid)
     .not('status', 'eq', 'blocked')
     .order('updated_at', { ascending: false })
     .limit(500)
@@ -50,7 +60,8 @@ export async function getKanbanLeads() {
 }
 
 export async function getLeadDetails(leadId: string) {
-    const { data: lead } = await supabaseAdmin.from('leads').select('*').eq('id', leadId).single()
+    const tid = await getTenantId()
+    const { data: lead } = await supabaseAdmin.from('leads').select('*').eq('id', leadId).eq('tenant_id', tid).single()
     if (!lead) return null
     const { data: conversation } = await supabaseAdmin.from('conversations').select('*').eq('lead_id', leadId).order('created_at', { ascending: false }).limit(1).single()
     let messages: any[] = []
@@ -62,11 +73,13 @@ export async function getLeadDetails(leadId: string) {
 }
 
 export async function getAllLeads(page = 1, pageSize = 20) {
+    const tid = await getTenantId()
     const from = (page - 1) * pageSize
     const to = from + pageSize - 1
     const { data: leads, count } = await supabaseAdmin
         .from('leads')
         .select('*', { count: 'exact' })
+        .eq('tenant_id', tid)
         .order('created_at', { ascending: false })
         .range(from, to)
     return { leads: leads || [], total: count || 0, totalPages: count ? Math.ceil(count / pageSize) : 0 }
@@ -119,9 +132,11 @@ export async function updateTemplates(data: any) {
 
 export async function getConversations() {
     try {
+        const tid = await getTenantId()
         const { data, error } = await supabaseAdmin
             .from("conversations")
             .select(`id, status, intent_classification, next_follow_up_at, updated_at, leads ( id, nome, empresa, telefone, valor_divida )`)
+            .eq('tenant_id', tid)
             .not('status', 'eq', 'blocked')
             .not('status', 'eq', 'no_response')
             .not('status', 'eq', 'wrong_person')
@@ -217,7 +232,8 @@ export async function createChipAction(instanceName: string, phoneNumber?: strin
 
 export async function getCampaigns() {
     try {
-        const { data: campaigns } = await supabaseAdmin.from('campaigns').select('*').order('created_at', { ascending: false })
+        const tid = await getTenantId()
+        const { data: campaigns } = await supabaseAdmin.from('campaigns').select('*').eq('tenant_id', tid).order('created_at', { ascending: false })
         return { success: true, campaigns: campaigns || [] }
     } catch (e) { return { success: false, campaigns: [] } }
 }
@@ -347,9 +363,11 @@ export async function createCampaignFromProspects(searchId: string, resultIds: s
 
 export async function listSavedSearches() {
     try {
+        const tid = await getTenantId()
         const { data } = await supabaseAdmin
             .from('prospect_searches')
             .select('*')
+            .eq('tenant_id', tid)
             .in('status', ['completed', 'failed'])
             .order('created_at', { ascending: false })
             .limit(50)
