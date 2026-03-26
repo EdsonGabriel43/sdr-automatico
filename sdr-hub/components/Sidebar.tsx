@@ -4,7 +4,7 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { createBrowserSupabaseClient } from "@/lib/supabase-clients"
-import { canAccess, type UserProfile } from "@/lib/auth"
+import { canAccess, type UserProfile } from "@/lib/auth-types"
 import {
     LayoutDashboard,
     MessageSquare,

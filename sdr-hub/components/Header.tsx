@@ -4,7 +4,7 @@ import { useTheme } from "next-themes"
 import { usePathname } from "next/navigation"
 import { Sun, Moon, Bell } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import type { UserProfile } from "@/lib/auth"
+import type { UserProfile } from "@/lib/auth-types"
 
 const pageTitles: Record<string, string> = {
     "/": "Dashboard",
