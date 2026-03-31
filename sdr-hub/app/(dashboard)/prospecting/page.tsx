@@ -12,7 +12,7 @@ import {
     startProspectingSearch, getProspectingResults, enrichProspects,
     createCampaignFromProspects, listSavedSearches, renameSearch,
     deleteSearch, deleteProspectResult, updateProspectResult,
-    startCnpjEnrichment
+    startCnpjEnrichment, startSocialEnrichment
 } from "@/app/actions"
 
 const PLATFORMS = [
@@ -54,7 +54,7 @@ interface SavedSearch {
     completed_at: string | null
 }
 
-type PageView = "new_search" | "saved_searches" | "view_search" | "cnpj_enrich"
+type PageView = "new_search" | "saved_searches" | "view_search" | "cnpj_enrich" | "social_enrich"
 
 export default function ProspectingPage() {
     const router = useRouter()
@@ -104,6 +104,10 @@ export default function ProspectingPage() {
     // CNPJ enrichment state
     const [cnpjRows, setCnpjRows] = useState<{ cnpj: string; name: string }[]>([{ cnpj: "", name: "" }])
     const [cnpjPlatforms, setCnpjPlatforms] = useState(["linkedin", "google"])
+
+    // Social enrichment state
+    const [socialUrls, setSocialUrls] = useState<string[]>([""])
+    const [useApify, setUseApify] = useState(false)
 
     // Filtered results
     const filteredResults = useMemo(() => {
@@ -233,6 +237,42 @@ export default function ProspectingPage() {
         if (rows.length > 1) {
             setCnpjRows(rows)
             toast.success(`${rows.length} CNPJs importados`)
+        }
+    }
+
+    // Social enrichment handlers
+    const handleSocialEnrich = async () => {
+        const validUrls = socialUrls.filter(u => u.trim())
+        if (validUrls.length === 0) { toast.error("Adicione pelo menos um link"); return }
+
+        setIsSearching(true)
+        setSearchId(null)
+        setResults([])
+        setSelectedIds(new Set())
+        setSearchStatus("pending")
+
+        const items = validUrls.map(u => ({ url: u.trim() }))
+        const res = await startSocialEnrichment(items, useApify)
+        if (res.success && res.data) {
+            setSearchId(res.data.search_id)
+            setSearchStatus("running")
+            setView("new_search")
+            toast.info(`Buscando contatos de ${validUrls.length} perfis...`)
+        } else {
+            setIsSearching(false)
+            toast.error(res.error || "Erro ao iniciar enriquecimento")
+        }
+    }
+
+    const addSocialUrl = () => setSocialUrls(prev => [...prev, ""])
+    const removeSocialUrl = (idx: number) => setSocialUrls(prev => prev.filter((_, i) => i !== idx))
+    const updateSocialUrl = (idx: number, value: string) => setSocialUrls(prev => prev.map((u, i) => i === idx ? value : u))
+
+    const parseSocialPaste = (text: string) => {
+        const lines = text.split("\n").map(l => l.trim()).filter(l => l)
+        if (lines.length > 1) {
+            setSocialUrls(lines)
+            toast.success(`${lines.length} links importados`)
         }
     }
 
@@ -401,6 +441,14 @@ export default function ProspectingPage() {
                     >
                         <Info className="h-4 w-4" /> Enriquecer CNPJ
                     </button>
+                    <button
+                        onClick={() => setView("social_enrich")}
+                        className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                            view === "social_enrich" ? "bg-primary text-primary-foreground shadow-sm" : "bg-secondary text-foreground hover:bg-secondary/80"
+                        }`}
+                    >
+                        <Globe className="h-4 w-4" /> Redes Sociais
+                    </button>
                 </div>
             </div>
 
@@ -511,6 +559,69 @@ export default function ProspectingPage() {
                 </div>
             )}
 
+            {/* =================== SOCIAL ENRICHMENT VIEW =================== */}
+            {view === "social_enrich" && (
+                <div className="bg-card border border-border rounded-xl p-6 space-y-4">
+                    <div>
+                        <h2 className="text-sm font-semibold text-foreground mb-1">Enriquecer por Redes Sociais</h2>
+                        <p className="text-xs text-muted-foreground">Cole links de Instagram, TikTok, Facebook ou X/Twitter. O sistema busca telefone, WhatsApp, email e nome real.</p>
+                    </div>
+
+                    <div className="bg-secondary/30 border border-border rounded-lg p-3 text-xs text-muted-foreground">
+                        Dica: cole múltiplos links (um por linha) no primeiro campo para importar em lote.
+                    </div>
+
+                    {/* URL Rows */}
+                    <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                        {socialUrls.map((url, idx) => (
+                            <div key={idx} className="flex items-center gap-2">
+                                <input
+                                    type="text"
+                                    value={url}
+                                    onChange={e => updateSocialUrl(idx, e.target.value)}
+                                    onPaste={e => {
+                                        const text = e.clipboardData.getData("text")
+                                        if (text.includes("\n")) { e.preventDefault(); parseSocialPaste(text) }
+                                    }}
+                                    placeholder="https://instagram.com/username"
+                                    className="flex-1 px-3 py-2 bg-secondary/50 border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                />
+                                {socialUrls.length > 1 && (
+                                    <button onClick={() => removeSocialUrl(idx)} className="p-2 text-muted-foreground hover:text-red-500 transition-colors">
+                                        <X className="h-4 w-4" />
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+
+                    <button onClick={addSocialUrl} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-secondary text-foreground rounded-md hover:bg-secondary/80">
+                        <Plus className="h-3 w-3" /> Adicionar link
+                    </button>
+
+                    {/* Options + Submit */}
+                    <div className="flex items-center justify-between pt-3 border-t border-border">
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={useApify}
+                                onChange={e => setUseApify(e.target.checked)}
+                                className="rounded border-border"
+                            />
+                            <Zap className="h-3.5 w-3.5" />
+                            Busca profunda (Apify — mais dados, mais lento)
+                        </label>
+                        <button
+                            onClick={handleSocialEnrich}
+                            disabled={isSearching || socialUrls.every(u => !u.trim())}
+                            className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-lg text-sm font-semibold hover:bg-primary/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                        >
+                            {isSearching ? <><Loader2 className="h-4 w-4 animate-spin" /> Buscando...</> : <><Search className="h-4 w-4" /> Buscar Contatos ({socialUrls.filter(u => u.trim()).length})</>}
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {/* =================== CNPJ ENRICHMENT VIEW =================== */}
             {view === "cnpj_enrich" && (
                 <div className="bg-card border border-border rounded-xl p-6 space-y-4">
@@ -603,7 +714,7 @@ export default function ProspectingPage() {
             )}
 
             {/* =================== RESULTS TABLE (shared) =================== */}
-            {results.length > 0 && !isSearching && (view === "new_search" || view === "view_search" || view === "cnpj_enrich") && (
+            {results.length > 0 && !isSearching && (view === "new_search" || view === "view_search" || view === "cnpj_enrich" || view === "social_enrich") && (
                 <>
                     {/* Stats */}
                     <div className="flex items-center gap-3 flex-wrap">

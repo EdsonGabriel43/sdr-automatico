@@ -248,6 +248,14 @@ class CnpjBatchEnrichRequest(BaseModel):
     items: list[CnpjEnrichItem]
     search_platforms: list[str] = ["linkedin", "google"]
 
+class SocialEnrichItem(BaseModel):
+    url: str  # Instagram, TikTok, Facebook, or X URL
+    platform: Optional[str] = None  # auto-detected if not provided
+
+class SocialBatchEnrichRequest(BaseModel):
+    items: list[SocialEnrichItem]
+    use_apify: bool = False  # Use Apify for deep scraping
+
 
 # ===== WEBHOOK ENDPOINT =====
 
@@ -701,6 +709,263 @@ async def run_cnpj_enrichment(search_id: str, items: list[dict], platforms: list
     }).eq("id", search_id).execute()
 
     logger.info(f"CNPJ Enrichment {search_id}: completed with {len(all_results)} results")
+
+
+# ===== SOCIAL MEDIA ENRICHMENT =====
+
+def _detect_platform(url: str) -> str:
+    """Detect social platform from URL."""
+    url_lower = url.lower()
+    if "instagram.com" in url_lower: return "instagram"
+    if "tiktok.com" in url_lower: return "tiktok"
+    if "facebook.com" in url_lower or "fb.com" in url_lower: return "facebook"
+    if "twitter.com" in url_lower or "x.com" in url_lower: return "twitter"
+    return "unknown"
+
+def _extract_username(url: str, platform: str) -> str:
+    """Extract username from social URL."""
+    import re
+    url = url.strip().rstrip("/")
+    if platform == "instagram":
+        m = re.search(r'instagram\.com/([^/?#]+)', url)
+        return m.group(1) if m else url
+    if platform == "tiktok":
+        m = re.search(r'tiktok\.com/@?([^/?#]+)', url)
+        return m.group(1) if m else url
+    if platform == "facebook":
+        m = re.search(r'facebook\.com/(?:profile\.php\?id=)?([^/?#]+)', url)
+        return m.group(1) if m else url
+    if platform == "twitter":
+        m = re.search(r'(?:twitter|x)\.com/([^/?#]+)', url)
+        return m.group(1) if m else url
+    return url
+
+
+@app.post("/prospecting/enrich-social")
+async def enrich_social_batch(req: SocialBatchEnrichRequest, background_tasks: BackgroundTasks):
+    """Enriquece perfis de redes sociais: busca telefone, email, nome real."""
+    sb = get_supabase()
+
+    platforms_used = list(set(
+        item.platform or _detect_platform(item.url) for item in req.items
+    ))
+
+    search = sb.table("prospect_searches").insert({
+        "query_text": f"Enriquecimento Social ({len(req.items)} perfis)",
+        "search_type": "social_enrichment",
+        "filters": {"urls": [i.url for i in req.items], "platforms": platforms_used, "use_apify": req.use_apify},
+        "status": "pending",
+    }).execute()
+
+    search_id = search.data[0]["id"]
+
+    background_tasks.add_task(
+        run_social_enrichment,
+        search_id=search_id,
+        items=[{"url": i.url, "platform": i.platform or _detect_platform(i.url)} for i in req.items],
+        use_apify=req.use_apify,
+    )
+
+    return {"search_id": search_id, "status": "pending"}
+
+
+async def run_social_enrichment(search_id: str, items: list[dict], use_apify: bool = False):
+    """Background: enriches social profiles via Google X-Ray + optional Apify."""
+    import re
+    import time
+
+    sb = get_supabase()
+    sb.table("prospect_searches").update({"status": "running"}).eq("id", search_id).execute()
+
+    all_results = []
+    apify_token = os.getenv("APIFY_TOKEN", "")
+
+    for item in items:
+        url = item["url"]
+        platform = item["platform"]
+        username = _extract_username(url, platform)
+
+        logger.info(f"Social Enrich: @{username} ({platform})")
+
+        found_name = None
+        found_email = None
+        found_phone = None
+        found_bio = ""
+        snippets = []
+
+        # --- Layer 1: Google X-Ray (free, fast) ---
+        if _load_prospecting_modules():
+            queries = []
+            if platform == "instagram":
+                queries.append(f'"{username}" ("whatsapp" OR "telefone" OR "contato" OR "@gmail" OR "@hotmail")')
+                queries.append(f'site:linktr.ee OR site:bio.link "{username}"')
+            elif platform == "tiktok":
+                queries.append(f'"{username}" tiktok ("whatsapp" OR "telefone" OR "contato" OR "email")')
+                queries.append(f'site:linktr.ee "{username}"')
+            elif platform == "facebook":
+                queries.append(f'site:facebook.com "{username}" ("telefone" OR "email" OR "contato")')
+            elif platform == "twitter":
+                queries.append(f'site:x.com OR site:twitter.com "{username}" ("email" OR "contato")')
+                queries.append(f'"{username}" ("whatsapp" OR "telefone" OR "@gmail")')
+
+            for query in queries:
+                try:
+                    raw = search_google(query, country_code="br", num_results=10)
+                    for r in (raw.get("organic", []) if isinstance(raw, dict) else (raw or [])):
+                        snippet = r.get("snippet", "")
+                        title = r.get("title", "")
+                        link = r.get("link", "")
+                        snippets.append(snippet)
+
+                        # Extract name from title
+                        if not found_name and title and "@" not in title:
+                            # Clean title: remove platform names
+                            clean_title = re.sub(r'\s*[\|\-–—•]\s*(Instagram|TikTok|Facebook|Twitter|X).*', '', title).strip()
+                            clean_title = re.sub(r'\(@?\w+\)', '', clean_title).strip()
+                            if clean_title and len(clean_title) > 2 and len(clean_title) < 60:
+                                found_name = clean_title
+
+                        if extract_contacts:
+                            contacts = extract_contacts(snippet + " " + title)
+                            if contacts.get("email") and not found_email:
+                                found_email = contacts["email"]
+                            if contacts.get("phone") and not found_phone:
+                                found_phone = contacts["phone"]
+
+                    time.sleep(0.3)
+                except Exception as e:
+                    logger.warning(f"Google search error for @{username}: {e}")
+
+        # --- Layer 2: Apify deep scrape (if enabled and token available) ---
+        if use_apify and apify_token and (not found_phone or not found_email):
+            try:
+                actor_map = {
+                    "instagram": "apify/instagram-profile-scraper",
+                    "tiktok": "clockworks/tiktok-profile-scraper",
+                    "facebook": "apify/facebook-pages-scraper",
+                    "twitter": "apify/twitter-scraper",
+                }
+                actor_id = actor_map.get(platform)
+                if actor_id:
+                    # Build input based on platform
+                    if platform == "instagram":
+                        actor_input = {"usernames": [username]}
+                    elif platform == "tiktok":
+                        actor_input = {"profiles": [f"https://www.tiktok.com/@{username}"]}
+                    elif platform == "facebook":
+                        actor_input = {"startUrls": [{"url": url}]}
+                    elif platform == "twitter":
+                        actor_input = {"handles": [username], "tweetsDesired": 0}
+                    else:
+                        actor_input = {}
+
+                    # Call Apify API
+                    apify_url = f"https://api.apify.com/v2/acts/{actor_id.replace('/', '~')}/run-sync-get-dataset-items?token={apify_token}"
+                    resp = httpx.post(apify_url, json=actor_input, timeout=120)
+
+                    if resp.status_code == 200:
+                        apify_data = resp.json()
+                        if apify_data and len(apify_data) > 0:
+                            profile = apify_data[0]
+
+                            # Extract data based on platform
+                            if platform == "instagram":
+                                found_name = found_name or profile.get("fullName") or profile.get("name")
+                                found_bio = profile.get("biography", "")
+                                if not found_email:
+                                    found_email = profile.get("businessEmail") or profile.get("email")
+                                if not found_phone:
+                                    found_phone = profile.get("businessPhoneNumber") or profile.get("phone")
+                                # Check bio for contacts
+                                if found_bio and extract_contacts:
+                                    bio_contacts = extract_contacts(found_bio)
+                                    if not found_email and bio_contacts.get("email"):
+                                        found_email = bio_contacts["email"]
+                                    if not found_phone and bio_contacts.get("phone"):
+                                        found_phone = bio_contacts["phone"]
+
+                            elif platform == "tiktok":
+                                found_name = found_name or profile.get("nickname") or profile.get("name")
+                                found_bio = profile.get("signature", "") or profile.get("bio", "")
+                                if found_bio and extract_contacts:
+                                    bio_contacts = extract_contacts(found_bio)
+                                    if not found_email: found_email = bio_contacts.get("email")
+                                    if not found_phone: found_phone = bio_contacts.get("phone")
+
+                            elif platform == "facebook":
+                                found_name = found_name or profile.get("name") or profile.get("title")
+                                found_email = found_email or profile.get("email")
+                                found_phone = found_phone or profile.get("phone")
+
+                            elif platform == "twitter":
+                                found_name = found_name or profile.get("name")
+                                found_bio = profile.get("description", "")
+                                if found_bio and extract_contacts:
+                                    bio_contacts = extract_contacts(found_bio)
+                                    if not found_email: found_email = bio_contacts.get("email")
+                                    if not found_phone: found_phone = bio_contacts.get("phone")
+
+                            logger.info(f"Apify [{platform}] @{username}: name={found_name}, email={found_email}, phone={found_phone}")
+
+                time.sleep(1)  # Rate limit Apify
+            except Exception as e:
+                logger.warning(f"Apify error for @{username}: {e}")
+
+        # --- Layer 3: WhatsApp check ---
+        whatsapp_status = "unknown"
+        if found_phone:
+            try:
+                from pgfn_module.whatsapp_finder import check_whatsapp
+                wa_result = check_whatsapp(found_phone)
+                if isinstance(wa_result, dict):
+                    whatsapp_status = "confirmed" if wa_result.get("has_whatsapp") else "not_whatsapp"
+                elif wa_result:
+                    whatsapp_status = "confirmed"
+                else:
+                    whatsapp_status = "not_whatsapp"
+            except Exception:
+                pass
+
+        # Score
+        score = 0
+        if found_phone:
+            import re as _re
+            digits = _re.sub(r'\D', '', found_phone)
+            if len(digits) >= 11 and digits[-9] == '9': score += 1000
+            elif len(digits) >= 10: score += 500
+        if whatsapp_status == "confirmed": score += 500
+        if found_email: score += 10
+        if platform == "instagram": score += 50
+
+        result = {
+            "search_id": search_id,
+            "name": found_name or f"@{username}",
+            "email": found_email,
+            "phone": found_phone,
+            "role_snippet": (found_bio or "; ".join(snippets[:3]))[:500],
+            "company": None,
+            "profile_url": url,
+            "source_platform": platform,
+            "cnpj": None,
+            "address": None,
+            "whatsapp_status": whatsapp_status,
+            "priority_score": score,
+        }
+        all_results.append(result)
+
+    # Insert results
+    if all_results:
+        for i in range(0, len(all_results), 50):
+            batch = all_results[i:i + 50]
+            sb.table("prospect_results").insert(batch).execute()
+
+    sb.table("prospect_searches").update({
+        "status": "completed",
+        "total_results": len(all_results),
+        "completed_at": datetime.now().isoformat(),
+    }).eq("id", search_id).execute()
+
+    logger.info(f"Social Enrichment {search_id}: completed with {len(all_results)} results")
 
 
 # ===== LEADS ENDPOINTS =====
