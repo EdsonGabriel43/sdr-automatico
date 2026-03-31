@@ -11,7 +11,8 @@ import { toast } from "sonner"
 import {
     startProspectingSearch, getProspectingResults, enrichProspects,
     createCampaignFromProspects, listSavedSearches, renameSearch,
-    deleteSearch, deleteProspectResult, updateProspectResult
+    deleteSearch, deleteProspectResult, updateProspectResult,
+    startCnpjEnrichment
 } from "@/app/actions"
 
 const PLATFORMS = [
@@ -53,7 +54,7 @@ interface SavedSearch {
     completed_at: string | null
 }
 
-type PageView = "new_search" | "saved_searches" | "view_search"
+type PageView = "new_search" | "saved_searches" | "view_search" | "cnpj_enrich"
 
 export default function ProspectingPage() {
     const router = useRouter()
@@ -99,6 +100,10 @@ export default function ProspectingPage() {
     const [editNoteValue, setEditNoteValue] = useState("")
     const [renamingSearch, setRenamingSearch] = useState<string | null>(null)
     const [renameValue, setRenameValue] = useState("")
+
+    // CNPJ enrichment state
+    const [cnpjRows, setCnpjRows] = useState<{ cnpj: string; name: string }[]>([{ cnpj: "", name: "" }])
+    const [cnpjPlatforms, setCnpjPlatforms] = useState(["linkedin", "google"])
 
     // Filtered results
     const filteredResults = useMemo(() => {
@@ -187,6 +192,47 @@ export default function ProspectingPage() {
         } else {
             setIsSearching(false)
             toast.error(res.error || "Erro ao iniciar busca")
+        }
+    }
+
+    const handleCnpjEnrich = async () => {
+        const validRows = cnpjRows.filter(r => r.cnpj.replace(/\D/g, "").length >= 11)
+        if (validRows.length === 0) { toast.error("Adicione pelo menos um CNPJ válido"); return }
+
+        setIsSearching(true)
+        setSearchId(null)
+        setResults([])
+        setSelectedIds(new Set())
+        setSearchStatus("pending")
+
+        const items = validRows.map(r => ({ cnpj: r.cnpj, decision_maker_name: r.name || undefined }))
+        const res = await startCnpjEnrichment(items, cnpjPlatforms)
+        if (res.success && res.data) {
+            setSearchId(res.data.search_id)
+            setSearchStatus("running")
+            setView("new_search")
+            toast.info(`Enriquecendo ${validRows.length} CNPJs...`)
+        } else {
+            setIsSearching(false)
+            toast.error(res.error || "Erro ao iniciar enriquecimento")
+        }
+    }
+
+    const addCnpjRow = () => setCnpjRows(prev => [...prev, { cnpj: "", name: "" }])
+    const removeCnpjRow = (idx: number) => setCnpjRows(prev => prev.filter((_, i) => i !== idx))
+    const updateCnpjRow = (idx: number, field: "cnpj" | "name", value: string) => {
+        setCnpjRows(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r))
+    }
+
+    const parseCnpjPaste = (text: string) => {
+        const lines = text.split("\n").filter(l => l.trim())
+        const rows = lines.map(line => {
+            const parts = line.split(/[;\t,]/).map(p => p.trim())
+            return { cnpj: parts[0] || "", name: parts[1] || "" }
+        }).filter(r => r.cnpj)
+        if (rows.length > 1) {
+            setCnpjRows(rows)
+            toast.success(`${rows.length} CNPJs importados`)
         }
     }
 
@@ -347,6 +393,14 @@ export default function ProspectingPage() {
                     >
                         <Clock className="h-4 w-4" /> Buscas Anteriores
                     </button>
+                    <button
+                        onClick={() => setView("cnpj_enrich")}
+                        className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                            view === "cnpj_enrich" ? "bg-primary text-primary-foreground shadow-sm" : "bg-secondary text-foreground hover:bg-secondary/80"
+                        }`}
+                    >
+                        <Info className="h-4 w-4" /> Enriquecer CNPJ
+                    </button>
                 </div>
             </div>
 
@@ -457,6 +511,84 @@ export default function ProspectingPage() {
                 </div>
             )}
 
+            {/* =================== CNPJ ENRICHMENT VIEW =================== */}
+            {view === "cnpj_enrich" && (
+                <div className="bg-card border border-border rounded-xl p-6 space-y-4">
+                    <div>
+                        <h2 className="text-sm font-semibold text-foreground mb-1">Enriquecer por CNPJ</h2>
+                        <p className="text-xs text-muted-foreground">Cole CNPJs e nomes dos decisores. O sistema consulta Receita Federal, busca contatos no Google/LinkedIn e tenta encontrar email e telefone.</p>
+                    </div>
+
+                    {/* Paste area hint */}
+                    <div className="bg-secondary/30 border border-border rounded-lg p-3 text-xs text-muted-foreground">
+                        Dica: cole direto do Excel/planilha no formato <strong>CNPJ ; Nome do Decisor</strong> (um por linha) no primeiro campo CNPJ.
+                    </div>
+
+                    {/* CNPJ Rows */}
+                    <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                        {cnpjRows.map((row, idx) => (
+                            <div key={idx} className="flex items-center gap-2">
+                                <input
+                                    type="text"
+                                    value={row.cnpj}
+                                    onChange={e => updateCnpjRow(idx, "cnpj", e.target.value)}
+                                    onPaste={e => {
+                                        const text = e.clipboardData.getData("text")
+                                        if (text.includes("\n") || text.includes(";") || text.includes("\t")) {
+                                            e.preventDefault()
+                                            parseCnpjPaste(text)
+                                        }
+                                    }}
+                                    placeholder="00.000.000/0001-00"
+                                    className="flex-1 max-w-[220px] px-3 py-2 bg-secondary/50 border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+                                />
+                                <input
+                                    type="text"
+                                    value={row.name}
+                                    onChange={e => updateCnpjRow(idx, "name", e.target.value)}
+                                    placeholder="Nome do decisor (opcional)"
+                                    className="flex-1 px-3 py-2 bg-secondary/50 border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                />
+                                {cnpjRows.length > 1 && (
+                                    <button onClick={() => removeCnpjRow(idx)} className="p-2 text-muted-foreground hover:text-red-500 transition-colors">
+                                        <X className="h-4 w-4" />
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+
+                    <button onClick={addCnpjRow} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-secondary text-foreground rounded-md hover:bg-secondary/80">
+                        <Plus className="h-3 w-3" /> Adicionar linha
+                    </button>
+
+                    {/* Platforms + Submit */}
+                    <div className="flex items-center justify-between pt-3 border-t border-border">
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">Buscar em:</span>
+                            {PLATFORMS.filter(p => ["linkedin", "instagram", "google"].includes(p.id)).map(p => (
+                                <button
+                                    key={p.id}
+                                    onClick={() => setCnpjPlatforms(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id])}
+                                    className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${
+                                        cnpjPlatforms.includes(p.id) ? `${p.color} text-white border-transparent` : "bg-secondary text-muted-foreground border-border"
+                                    }`}
+                                >
+                                    {p.label}
+                                </button>
+                            ))}
+                        </div>
+                        <button
+                            onClick={handleCnpjEnrich}
+                            disabled={isSearching || cnpjRows.every(r => !r.cnpj.trim())}
+                            className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-lg text-sm font-semibold hover:bg-primary/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                        >
+                            {isSearching ? <><Loader2 className="h-4 w-4 animate-spin" /> Enriquecendo...</> : <><Zap className="h-4 w-4" /> Enriquecer {cnpjRows.filter(r => r.cnpj.trim()).length} CNPJs</>}
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {/* =================== VIEW SEARCH (viewing saved search) =================== */}
             {view === "view_search" && (
                 <div className="flex items-center gap-3">
@@ -471,7 +603,7 @@ export default function ProspectingPage() {
             )}
 
             {/* =================== RESULTS TABLE (shared) =================== */}
-            {results.length > 0 && !isSearching && (view === "new_search" || view === "view_search") && (
+            {results.length > 0 && !isSearching && (view === "new_search" || view === "view_search" || view === "cnpj_enrich") && (
                 <>
                     {/* Stats */}
                     <div className="flex items-center gap-3 flex-wrap">

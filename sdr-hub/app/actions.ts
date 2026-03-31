@@ -304,6 +304,18 @@ export async function getCampaignDetails(campaignId: string) {
     } catch (error) { return null }
 }
 
+export async function startCnpjEnrichment(items: { cnpj: string; decision_maker_name?: string }[], platforms: string[] = ["linkedin", "google"]) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/prospecting/enrich-cnpj`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items, search_platforms: platforms }),
+        })
+        if (!res.ok) throw new Error(`Erro API: ${res.statusText}`)
+        return { success: true, data: await res.json() }
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
 export async function startProspectingSearch(query: string, mode: string, platforms: string[], location: string | null, enableDeepScraping: boolean = false) {
     try {
         const res = await fetch(`${DISPATCHER_API_URL}/prospecting/search`, {

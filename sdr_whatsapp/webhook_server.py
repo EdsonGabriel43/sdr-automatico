@@ -240,6 +240,14 @@ class ProspectingToCampaignRequest(BaseModel):
     campaign_name: str
     campaign_description: str = ""
 
+class CnpjEnrichItem(BaseModel):
+    cnpj: str
+    decision_maker_name: Optional[str] = None
+
+class CnpjBatchEnrichRequest(BaseModel):
+    items: list[CnpjEnrichItem]
+    search_platforms: list[str] = ["linkedin", "google"]
+
 
 # ===== WEBHOOK ENDPOINT =====
 
@@ -489,6 +497,210 @@ async def update_chip_status_endpoint(chip_id: str, req: UpdateChipStatusRequest
         raise HTTPException(status_code=400, detail="Status inválido")
     update_chip_status(chip_id, req.status)
     return {"success": True}
+
+
+# ===== CNPJ BATCH ENRICHMENT =====
+
+@app.post("/prospecting/enrich-cnpj")
+async def enrich_cnpj_batch(req: CnpjBatchEnrichRequest, background_tasks: BackgroundTasks):
+    """Enriquece uma lista de CNPJs: consulta BrasilAPI, busca decisor, encontra contatos."""
+    sb = get_supabase()
+
+    # Create a search record
+    search = sb.table("prospect_searches").insert({
+        "query_text": f"Enriquecimento CNPJ ({len(req.items)} empresas)",
+        "search_type": "cnpj_enrichment",
+        "filters": {"cnpjs": [i.cnpj for i in req.items]},
+        "status": "pending",
+    }).execute()
+
+    search_id = search.data[0]["id"]
+
+    background_tasks.add_task(
+        run_cnpj_enrichment,
+        search_id=search_id,
+        items=[{"cnpj": i.cnpj, "decision_maker_name": i.decision_maker_name} for i in req.items],
+        platforms=req.search_platforms,
+    )
+
+    return {"search_id": search_id, "status": "pending"}
+
+
+async def run_cnpj_enrichment(search_id: str, items: list[dict], platforms: list[str]):
+    """Background: enriquece cada CNPJ via BrasilAPI + busca contatos do decisor."""
+    import re
+    import time
+
+    sb = get_supabase()
+    sb.table("prospect_searches").update({"status": "running"}).eq("id", search_id).execute()
+
+    all_results = []
+
+    for item in items:
+        cnpj_raw = item["cnpj"]
+        dm_name = item.get("decision_maker_name") or ""
+        cnpj_clean = re.sub(r'\D', '', cnpj_raw).zfill(14)
+
+        logger.info(f"CNPJ Enrich: {cnpj_clean} (decisor: {dm_name})")
+
+        # 1. BrasilAPI lookup
+        cnpj_data = None
+        company_name = ""
+        phone_from_cnpj = None
+        domain = None
+
+        try:
+            resp = httpx.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_clean}", timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                cnpj_data = {
+                    "razao_social": data.get("razao_social"),
+                    "nome_fantasia": data.get("nome_fantasia"),
+                    "cnae_fiscal": data.get("cnae_fiscal"),
+                    "cnae_fiscal_descricao": data.get("cnae_fiscal_descricao"),
+                    "qsa": data.get("qsa", []),
+                    "logradouro": data.get("logradouro"),
+                    "municipio": data.get("municipio"),
+                    "uf": data.get("uf"),
+                    "cep": data.get("cep"),
+                    "capital_social": data.get("capital_social"),
+                    "porte": data.get("porte"),
+                    "situacao_cadastral": data.get("situacao_cadastral"),
+                    "descricao_situacao_cadastral": data.get("descricao_situacao_cadastral"),
+                }
+                company_name = data.get("nome_fantasia") or data.get("razao_social") or ""
+
+                # Extract phone
+                ddd1 = str(data.get("ddd_telefone_1", ""))
+                if ddd1:
+                    digits = re.sub(r'\D', '', ddd1)
+                    if len(digits) >= 10:
+                        phone_from_cnpj = digits
+
+                # If no decision maker name, use first QSA partner
+                if not dm_name and data.get("qsa"):
+                    for socio in data["qsa"]:
+                        nome = socio.get("nome_socio", "")
+                        if nome and nome not in ("", "N/A"):
+                            dm_name = nome
+                            break
+
+            time.sleep(0.5)  # Rate limit
+        except Exception as e:
+            logger.warning(f"BrasilAPI error for {cnpj_clean}: {e}")
+
+        # 2. Search for decision maker contacts via Google X-Ray
+        found_email = None
+        found_phone = phone_from_cnpj
+        found_linkedin = None
+        found_instagram = None
+        snippets = []
+
+        if dm_name and _load_prospecting_modules():
+            search_name = dm_name.split(" ")[0] + " " + (dm_name.split(" ")[-1] if len(dm_name.split(" ")) > 1 else "")
+
+            for platform in platforms:
+                try:
+                    if platform == "linkedin":
+                        query = f'site:linkedin.com/in "{search_name}" "{company_name}"'
+                    elif platform == "instagram":
+                        query = f'site:instagram.com "{search_name}" "{company_name}"'
+                    elif platform == "google":
+                        query = f'"{search_name}" "{company_name}" ("email" OR "telefone" OR "contato" OR "@")'
+                    else:
+                        continue
+
+                    raw = search_google(query, country_code="br", num_results=5)
+                    if raw:
+                        for r in (raw.get("organic", []) if isinstance(raw, dict) else raw):
+                            link = r.get("link", "")
+                            snippet = r.get("snippet", "")
+                            title = r.get("title", "")
+                            snippets.append(snippet)
+
+                            if "linkedin.com/in" in link and not found_linkedin:
+                                found_linkedin = link
+                            if "instagram.com" in link and not found_instagram:
+                                found_instagram = link
+
+                            # Extract contacts from snippet
+                            if extract_contacts:
+                                contacts = extract_contacts(snippet + " " + title)
+                                if contacts.get("email") and not found_email:
+                                    found_email = contacts["email"]
+                                if contacts.get("phone") and not found_phone:
+                                    found_phone = contacts["phone"]
+
+                    time.sleep(0.3)
+                except Exception as e:
+                    logger.warning(f"Search error [{platform}] for {dm_name}: {e}")
+
+        # 3. Try to find email via domain pattern guessing
+        if not found_email and dm_name and company_name:
+            try:
+                # Guess domain from company name
+                clean_company = re.sub(r'(ltda|eireli|s\.?a\.?|me|epp|ss)\.?$', '', company_name.lower().strip(), flags=re.IGNORECASE).strip()
+                clean_company = re.sub(r'[^a-z0-9]', '', clean_company)
+                if clean_company:
+                    possible_domains = [f"{clean_company}.com.br", f"{clean_company}.com"]
+                    name_parts = dm_name.lower().split()
+                    if len(name_parts) >= 2:
+                        first = name_parts[0]
+                        last = name_parts[-1]
+                        patterns = [
+                            f"{first}.{last}",
+                            f"{first}{last}",
+                            f"{first}",
+                            f"{first[0]}{last}",
+                        ]
+                        # Just store as guesses — we don't SMTP verify here to keep it fast
+                        found_email = f"{patterns[0]}@{possible_domains[0]}"
+            except Exception:
+                pass
+
+        # 4. Build result
+        score = 0
+        if found_phone:
+            digits = re.sub(r'\D', '', found_phone)
+            if len(digits) >= 11 and digits[-9] == '9':
+                score += 1000
+            elif len(digits) >= 10:
+                score += 500
+        if found_email:
+            score += 10
+        if found_linkedin:
+            score += 100
+
+        result = {
+            "search_id": search_id,
+            "name": dm_name or company_name,
+            "email": found_email,
+            "phone": found_phone,
+            "role_snippet": "; ".join(snippets[:3])[:500] if snippets else (cnpj_data.get("cnae_fiscal_descricao", "") if cnpj_data else ""),
+            "company": company_name,
+            "profile_url": found_linkedin or found_instagram,
+            "source_platform": "cnpj_enrichment",
+            "cnpj": cnpj_clean,
+            "address": f"{cnpj_data.get('logradouro', '')}, {cnpj_data.get('municipio', '')} - {cnpj_data.get('uf', '')}" if cnpj_data else None,
+            "cnpj_data": cnpj_data,
+            "priority_score": score,
+        }
+        all_results.append(result)
+
+    # Insert results
+    if all_results:
+        # Batch insert (50 at a time)
+        for i in range(0, len(all_results), 50):
+            batch = all_results[i:i + 50]
+            sb.table("prospect_results").insert(batch).execute()
+
+    sb.table("prospect_searches").update({
+        "status": "completed",
+        "total_results": len(all_results),
+        "completed_at": datetime.now().isoformat(),
+    }).eq("id", search_id).execute()
+
+    logger.info(f"CNPJ Enrichment {search_id}: completed with {len(all_results)} results")
 
 
 # ===== LEADS ENDPOINTS =====
