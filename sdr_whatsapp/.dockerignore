@@ -1,0 +1,10 @@
+venv/
+node_modules/
+evolution-native/
+.git/
+*.log
+*.pyc
+__pycache__/
+.env
+wa-server/
+.wwebjs_auth*/

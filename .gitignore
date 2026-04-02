@@ -22,6 +22,7 @@ sdr_whatsapp/evolution-native/node_modules/
 
 # Arquivos temporários e diagnóstico
 sdr_whatsapp/*.txt
+!sdr_whatsapp/requirements.txt
 sdr_whatsapp/diag*.py
 sdr_whatsapp/check_logs*.py
 ~WRL*.tmp
