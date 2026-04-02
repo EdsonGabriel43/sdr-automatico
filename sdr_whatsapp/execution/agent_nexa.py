@@ -27,6 +27,7 @@ from .chip_manager import (
     send_buttons_message,
     send_poll_message,
     increment_chip_counter,
+    set_current_tenant,
 )
 
 load_dotenv()
@@ -39,6 +40,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 # Carregar templates como DIRETRIZES (não serão enviados literalmente)
 TEMPLATES_PATH = Path(__file__).parent.parent / "config" / "templates.json"
 TEMPLATES = {}
+_TENANT_TEMPLATES_CACHE: dict[str, dict] = {}
 
 def reload_templates():
     global TEMPLATES
@@ -53,17 +55,44 @@ def get_supabase() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def get_guideline(template_key: str, variables: dict, section: str = "responses") -> str:
+def _load_tenant_templates(tenant_id: str) -> dict:
+    """Load templates for a specific tenant, with fallback to global."""
+    if not tenant_id:
+        return TEMPLATES
+    if tenant_id in _TENANT_TEMPLATES_CACHE:
+        return _TENANT_TEMPLATES_CACHE[tenant_id]
+    try:
+        sb = get_supabase()
+        result = sb.table("tenant_templates").select("templates").eq("tenant_id", tenant_id).single().execute()
+        if result.data and result.data.get("templates"):
+            tenant_tmpl = result.data["templates"]
+            # Merge: tenant overrides global
+            merged = {**TEMPLATES}
+            for section in tenant_tmpl:
+                if section in merged and isinstance(merged[section], dict):
+                    merged[section] = {**merged[section], **tenant_tmpl[section]}
+                else:
+                    merged[section] = tenant_tmpl[section]
+            _TENANT_TEMPLATES_CACHE[tenant_id] = merged
+            return merged
+    except Exception as e:
+        logger.warning(f"Error loading tenant templates for {tenant_id}: {e}")
+    return TEMPLATES
+
+
+def get_guideline(template_key: str, variables: dict, section: str = "responses", tenant_id: str = None) -> str:
     """
     Retorna o texto de referência (diretriz) do template,
     com variáveis substituídas. Este texto NÃO será enviado literalmente —
     será usado como guia para o LLM gerar a resposta adaptada.
     """
+    templates = _load_tenant_templates(tenant_id) if tenant_id else TEMPLATES
+
     if section == "messages":
-        template = TEMPLATES["messages"].get(template_key, {})
+        template = templates.get("messages", {}).get(template_key, {})
         text = template.get("text", "")
     else:
-        text = TEMPLATES["responses"].get(template_key, "")
+        text = templates.get("responses", {}).get(template_key, "")
 
     for key, value in variables.items():
         text = text.replace(f"{{{key}}}", str(value))
@@ -242,6 +271,7 @@ async def process_incoming_message(
     message_text: str,
     wa_message_id: str,
     instance_name: str,
+    tenant_id: str = None,
 ) -> Optional[str]:
     """
     Processa uma mensagem recebida de um lead.
@@ -249,7 +279,7 @@ async def process_incoming_message(
     """
     try:
         return await _process_incoming_message_impl(
-            phone, message_text, wa_message_id, instance_name
+            phone, message_text, wa_message_id, instance_name, tenant_id=tenant_id
         )
     except Exception as e:
         logger.error(
@@ -281,23 +311,32 @@ async def _process_incoming_message_impl(
     message_text: str,
     wa_message_id: str,
     instance_name: str,
+    tenant_id: str = None,
 ) -> Optional[str]:
     """Implementação interna do processamento de mensagens."""
     sb = get_supabase()
+
+    # Set tenant context for message routing
+    set_current_tenant(tenant_id)
 
     # 1. Encontrar lead pelo telefone (tenta todas as variantes do nono dígito)
     lead_result = None
     for phone_variant in _phone_variants(phone):
         logger.info(f"Buscando lead com telefone: {phone_variant}")
-        result = (
+        query = (
             sb.table("leads")
-            .select("id, nome, empresa, cnpj, valor_divida, cargo, tipo_divida")
+            .select("id, nome, empresa, cnpj, valor_divida, cargo, tipo_divida, tenant_id")
             .eq("telefone", phone_variant)
-            .execute()
         )
+        if tenant_id:
+            query = query.eq("tenant_id", tenant_id)
+        result = query.execute()
         if result.data:
             lead_result = result
             phone = phone_variant  # usar o formato que bateu no banco
+            # Se não tínhamos tenant_id, pegar do lead
+            if not tenant_id and result.data[0].get("tenant_id"):
+                tenant_id = result.data[0]["tenant_id"]
             break
 
     if not lead_result or not lead_result.data:

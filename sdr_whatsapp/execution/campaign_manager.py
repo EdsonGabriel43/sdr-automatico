@@ -13,7 +13,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-from .chip_manager import get_available_chip
+from .chip_manager import get_available_chip, set_current_tenant
 from .agent_nexa import send_first_contact
 
 load_dotenv()
@@ -164,6 +164,7 @@ def create_campaign(
     description: str = "",
     lead_ids: Optional[list[str]] = None,
     filters: Optional[dict] = None,
+    tenant_id: str = None,
 ) -> dict:
     """
     Cria uma nova campanha e associa leads.
@@ -180,15 +181,17 @@ def create_campaign(
     sb = get_supabase()
 
     # Criar campanha
+    campaign_data = {
+        "name": name,
+        "description": description,
+        "status": "draft",
+    }
+    if tenant_id:
+        campaign_data["tenant_id"] = tenant_id
+
     campaign_result = (
         sb.table("campaigns")
-        .insert(
-            {
-                "name": name,
-                "description": description,
-                "status": "draft",
-            }
-        )
+        .insert(campaign_data)
         .execute()
     )
     campaign = campaign_result.data[0]
@@ -218,15 +221,16 @@ def create_campaign(
     # Criar conversas para cada lead
     conversations = []
     for lead in leads_result.data:
-        conversations.append(
-            {
-                "lead_id": lead["id"],
-                "campaign_id": campaign_id,
-                "status": "pending",
-                "current_step": 0,
-                "follow_up_count": 0,
-            }
-        )
+        conv_data = {
+            "lead_id": lead["id"],
+            "campaign_id": campaign_id,
+            "status": "pending",
+            "current_step": 0,
+            "follow_up_count": 0,
+        }
+        if tenant_id:
+            conv_data["tenant_id"] = tenant_id
+        conversations.append(conv_data)
 
     # Inserir em lotes
     for i in range(0, len(conversations), 50):
@@ -253,7 +257,7 @@ def is_business_hours() -> bool:
     return BIZ_START <= now.hour < BIZ_END
 
 
-async def run_campaign(campaign_id: str) -> dict:
+async def run_campaign(campaign_id: str, tenant_id: str = None) -> dict:
     """
     Executa o envio de mensagens de uma campanha.
     Respeita limites de volume, horário comercial e delays.
@@ -262,6 +266,17 @@ async def run_campaign(campaign_id: str) -> dict:
         dict com métricas do envio (enviados, erros, limite_atingido)
     """
     sb = get_supabase()
+
+    # Set tenant context for message routing
+    if tenant_id:
+        set_current_tenant(tenant_id)
+
+    # Se não temos tenant_id, buscar da campanha
+    if not tenant_id:
+        camp = sb.table("campaigns").select("tenant_id").eq("id", campaign_id).single().execute()
+        if camp.data and camp.data.get("tenant_id"):
+            tenant_id = camp.data["tenant_id"]
+            set_current_tenant(tenant_id)
 
     # Ativar campanha
     sb.table("campaigns").update({"status": "active"}).eq(
@@ -290,8 +305,8 @@ async def run_campaign(campaign_id: str) -> dict:
             logger.info("Fora do horário comercial, parando envios")
             break
 
-        # Obter chip disponível
-        chip = get_available_chip()
+        # Obter chip disponível (filtrado por tenant)
+        chip = get_available_chip(tenant_id)
         if not chip:
             logger.warning("Nenhum chip disponível, parando envios")
             metrics["limit_reached"] = True

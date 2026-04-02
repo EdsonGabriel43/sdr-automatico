@@ -19,6 +19,31 @@ logger = logging.getLogger(__name__)
 # Servidor WhatsApp local (whatsapp-web.js)
 WA_SERVER_URL = os.getenv("WA_SERVER_URL", "http://localhost:3001")
 
+# Thread-local tenant context (set by agent before sending)
+_current_tenant_id: Optional[str] = None
+
+def set_current_tenant(tenant_id: Optional[str]):
+    """Set the current tenant context for message routing."""
+    global _current_tenant_id
+    _current_tenant_id = tenant_id
+
+def get_current_tenant() -> Optional[str]:
+    """Get the current tenant context."""
+    return _current_tenant_id
+
+def _get_wa_url_for_tenant(tenant_id: str = None) -> str:
+    """Resolve the wa-server URL for a given tenant. Falls back to default."""
+    if not tenant_id:
+        return WA_SERVER_URL
+    try:
+        sb = get_supabase()
+        inst = sb.table("whatsapp_instances").select("port").eq("tenant_id", tenant_id).single().execute()
+        if inst.data and inst.data.get("port"):
+            return f"http://localhost:{inst.data['port']}"
+    except Exception:
+        pass
+    return WA_SERVER_URL
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 
@@ -36,12 +61,13 @@ async def get_instance_status(instance_name: str = None) -> dict:
 
 
 async def send_text_message(
-    instance_name: str, phone: str, text: str
+    instance_name: str, phone: str, text: str, tenant_id: str = None
 ) -> dict:
     """Envia uma mensagem de texto simples."""
+    wa_url = _get_wa_url_for_tenant(tenant_id or _current_tenant_id)
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
-            f"{WA_SERVER_URL}/send/text",
+            f"{wa_url}/send/text",
             json={
                 "phone": phone,
                 "text": text,
@@ -57,14 +83,16 @@ async def send_buttons_message(
     text: str,
     buttons: list[dict],
     footer: str = "",
+    tenant_id: str = None,
 ) -> dict:
     """
     Envia mensagem com botões interativos.
     buttons: [{"id": "btn_1", "text": "Opção 1"}, ...]
     """
+    wa_url = _get_wa_url_for_tenant(tenant_id or _current_tenant_id)
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
-            f"{WA_SERVER_URL}/send/buttons",
+            f"{wa_url}/send/buttons",
             json={
                 "phone": phone,
                 "text": text,
@@ -89,15 +117,17 @@ async def send_poll_message(
     phone: str,
     question: str,
     options: list[str],
+    tenant_id: str = None,
 ) -> dict:
     """
     Envia uma enquete (poll) clicável no WhatsApp.
     options: ["Opção 1", "Opção 2", "Opção 3"]
     Fallback: envia como texto formatado com emojis.
     """
+    wa_url = _get_wa_url_for_tenant(tenant_id or _current_tenant_id)
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
-            f"{WA_SERVER_URL}/send/poll",
+            f"{wa_url}/send/poll",
             json={
                 "phone": phone,
                 "question": question,
@@ -142,10 +172,11 @@ def register_chip(
     return result.data[0] if result.data else {}
 
 
-def get_available_chip() -> Optional[dict]:
+def get_available_chip(tenant_id: str = None) -> Optional[dict]:
     """
     Retorna o chip disponível com menor uso no dia (round-robin).
     Só retorna chips ativos ou em aquecimento que ainda têm capacidade.
+    Filtra por tenant_id quando fornecido.
     """
     sb = get_supabase()
 
@@ -153,14 +184,17 @@ def get_available_chip() -> Optional[dict]:
     sb.rpc("reset_daily_chip_counters").execute()
     sb.rpc("update_warming_day").execute()
 
-    result = (
+    query = (
         sb.table("chips")
         .select("*")
         .in_("status", ["active", "warming"])
         .order("messages_sent_today", desc=False)
         .limit(1)
-        .execute()
     )
+    if tenant_id:
+        query = query.eq("tenant_id", tenant_id)
+
+    result = query.execute()
 
     if not result.data:
         logger.warning("Nenhum chip disponível!")
@@ -182,10 +216,13 @@ def increment_chip_counter(chip_id: str) -> None:
     sb.rpc("increment_chip_message_count", {"p_chip_id": chip_id}).execute()
 
 
-def get_all_chips() -> list:
-    """Lista todos os chips registrados."""
+def get_all_chips(tenant_id: str = None) -> list:
+    """Lista todos os chips registrados, filtrados por tenant."""
     sb = get_supabase()
-    result = sb.table("chips").select("*").order("created_at").execute()
+    query = sb.table("chips").select("*").order("created_at")
+    if tenant_id:
+        query = query.eq("tenant_id", tenant_id)
+    result = query.execute()
     return result.data or []
 
 

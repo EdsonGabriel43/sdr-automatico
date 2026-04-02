@@ -20,6 +20,7 @@ from .chip_manager import (
     send_buttons_message,
     increment_chip_counter,
     get_available_chip,
+    set_current_tenant,
 )
 
 load_dotenv()
@@ -152,6 +153,9 @@ async def check_nurturing_followups() -> dict:
         chip = conv.get("chips")
         follow_up_count = conv.get("follow_up_count", 0)
 
+        # Set tenant context for message routing
+        set_current_tenant(conv.get("tenant_id"))
+
         # Encerrar se excedeu o máximo
         if follow_up_count >= MAX_NURTURING_FOLLOWUPS:
             sb.table("conversations").update(
@@ -282,6 +286,9 @@ async def check_and_send_followups() -> dict:
         lead = conv["leads"]
         chip = conv["chips"]
         follow_up_count = conv.get("follow_up_count", 0)
+
+        # Set tenant context for message routing
+        set_current_tenant(conv.get("tenant_id"))
 
         # Verificar se excedeu o máximo
         if follow_up_count >= MAX_FOLLOWUPS:
