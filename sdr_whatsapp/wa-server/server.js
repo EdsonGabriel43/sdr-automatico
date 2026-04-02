@@ -13,15 +13,20 @@ app.use(express.json());
 
 const PORT = process.env.WA_PORT || 3001;
 const WEBHOOK_URL = process.env.WEBHOOK_URL || 'http://localhost:5000/webhook';
+const INSTANCE_ID = process.env.INSTANCE_ID || 'default';
+const AUTH_PATH = `./.wwebjs_auth_${INSTANCE_ID}`;
 
 // Estado global
 let connectionStatus = 'disconnected'; // disconnected | qr | connected
 let lastQR = null;
 let intentionalDisconnect = false;
 
+console.log(`🏷️ Instance ID: ${INSTANCE_ID}`);
+console.log(`📁 Auth path: ${AUTH_PATH}`);
+
 // ===== CLIENTE WHATSAPP =====
 let client = new Client({
-    authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
+    authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
     puppeteer: {
         headless: true,
         args: [
@@ -55,9 +60,17 @@ client.on('ready', () => {
     const info = client.info;
     console.log('\n╔══════════════════════════════════════╗');
     console.log('║   ✅ WHATSAPP CONECTADO!              ║');
+    console.log(`║   Instance: ${INSTANCE_ID}`.padEnd(39) + '║');
     console.log(`║   Número: ${info?.wid?.user || 'N/A'}`.padEnd(39) + '║');
     console.log(`║   Nome: ${info?.pushname || 'N/A'}`.padEnd(39) + '║');
     console.log('╚══════════════════════════════════════╝\n');
+
+    // Report status to webhook server
+    fetch(`${WEBHOOK_URL.replace('/webhook', '')}/instances/${INSTANCE_ID}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'connected', phone_number: info?.wid?.user, name: info?.pushname }),
+    }).catch(() => {});
 });
 
 // Desconectado
@@ -130,7 +143,7 @@ client.on('message', async (msg) => {
                 conversation: msg.body,
             },
             phone: phone,
-            instanceName: 'wa-server',
+            instanceName: INSTANCE_ID,
             messageType: msg.type, // text, ptt, audio, image, etc.
         },
     };
@@ -201,7 +214,7 @@ client.on('vote_update', async (vote) => {
                 conversation: selectedOption,
             },
             phone: phone,
-            instanceName: 'wa-server',
+            instanceName: INSTANCE_ID,
             isPollVote: true,
         },
     };
@@ -242,6 +255,7 @@ app.get('/status', async (req, res) => {
     }
 
     res.json({
+        instance_id: INSTANCE_ID,
         status: realState,
         number: client.info?.wid?.user || null,
         name: client.info?.pushname || null,
@@ -424,7 +438,7 @@ app.post('/disconnect', async (req, res) => {
         if (clearAuth) {
             const fs = require('fs');
             const path = require('path');
-            const authDir = path.join(__dirname, '.wwebjs_auth');
+            const authDir = path.join(__dirname, AUTH_PATH);
             if (fs.existsSync(authDir)) {
                 fs.rmSync(authDir, { recursive: true, force: true });
                 console.log('🗑️ Auth data cleared for phone swap');
@@ -448,7 +462,7 @@ app.post('/reconnect', async (req, res) => {
 
         // Criar novo client
         client = new Client({
-            authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
+            authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
             puppeteer: {
                 headless: true,
                 args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--disable-gpu'],

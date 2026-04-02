@@ -968,6 +968,150 @@ async def run_social_enrichment(search_id: str, items: list[dict], use_apify: bo
     logger.info(f"Social Enrichment {search_id}: completed with {len(all_results)} results")
 
 
+# ===== WHATSAPP INSTANCE MANAGEMENT =====
+
+@app.get("/instances")
+async def list_instances():
+    """Lista todas as instâncias WhatsApp."""
+    sb = get_supabase()
+    result = sb.table("whatsapp_instances").select("*, tenants(name, slug)").execute()
+    instances = result.data or []
+
+    # Check live status of each instance
+    for inst in instances:
+        if inst.get("port"):
+            try:
+                resp = httpx.get(f"http://localhost:{inst['port']}/status", timeout=3)
+                if resp.status_code == 200:
+                    live = resp.json()
+                    inst["live_status"] = live.get("status", "unknown")
+                    inst["live_number"] = live.get("number")
+                    inst["live_name"] = live.get("name")
+                else:
+                    inst["live_status"] = "unreachable"
+            except Exception:
+                inst["live_status"] = "offline"
+        else:
+            inst["live_status"] = "no_port"
+
+    return {"instances": instances}
+
+
+@app.get("/instances/{instance_name}/qr")
+async def get_instance_qr(instance_name: str):
+    """Retorna QR code da instância para conexão."""
+    sb = get_supabase()
+    inst = sb.table("whatsapp_instances").select("*").eq("instance_name", instance_name).single().execute()
+    if not inst.data:
+        raise HTTPException(404, "Instância não encontrada")
+
+    port = inst.data.get("port")
+    if not port:
+        raise HTTPException(400, "Instância sem porta configurada")
+
+    try:
+        resp = httpx.get(f"http://localhost:{port}/qr/json", timeout=5)
+        return resp.json()
+    except Exception as e:
+        raise HTTPException(503, f"Instância offline: {e}")
+
+
+@app.post("/instances/{instance_name}/status")
+async def update_instance_status(instance_name: str, request: Request):
+    """Callback do wa-server quando conecta/desconecta."""
+    sb = get_supabase()
+    body = await request.json()
+
+    update_data = {"status": body.get("status", "disconnected")}
+    if body.get("phone_number"):
+        update_data["phone_number"] = body["phone_number"]
+    if body.get("status") == "connected":
+        update_data["connected_at"] = datetime.now().isoformat()
+
+    sb.table("whatsapp_instances").update(update_data).eq("instance_name", instance_name).execute()
+    logger.info(f"Instance {instance_name} status → {body.get('status')}")
+    return {"ok": True}
+
+
+@app.post("/instances/{instance_name}/disconnect")
+async def disconnect_instance(instance_name: str, clear_auth: bool = False):
+    """Desconecta a instância WhatsApp."""
+    sb = get_supabase()
+    inst = sb.table("whatsapp_instances").select("*").eq("instance_name", instance_name).single().execute()
+    if not inst.data:
+        raise HTTPException(404, "Instância não encontrada")
+
+    port = inst.data.get("port")
+    if not port:
+        raise HTTPException(400, "Instância sem porta configurada")
+
+    try:
+        resp = httpx.post(f"http://localhost:{port}/disconnect?clear_auth={'true' if clear_auth else 'false'}", timeout=10)
+        sb.table("whatsapp_instances").update({"status": "disconnected", "phone_number": None}).eq("instance_name", instance_name).execute()
+        return resp.json()
+    except Exception as e:
+        raise HTTPException(503, f"Erro ao desconectar: {e}")
+
+
+@app.post("/instances/{instance_name}/reconnect")
+async def reconnect_instance(instance_name: str):
+    """Reconecta a instância WhatsApp (gera novo QR)."""
+    sb = get_supabase()
+    inst = sb.table("whatsapp_instances").select("*").eq("instance_name", instance_name).single().execute()
+    if not inst.data:
+        raise HTTPException(404, "Instância não encontrada")
+
+    port = inst.data.get("port")
+    if not port:
+        raise HTTPException(400, "Instância sem porta configurada")
+
+    try:
+        resp = httpx.post(f"http://localhost:{port}/reconnect", timeout=10)
+        sb.table("whatsapp_instances").update({"status": "qr_pending"}).eq("instance_name", instance_name).execute()
+        return resp.json()
+    except Exception as e:
+        raise HTTPException(503, f"Erro ao reconectar: {e}")
+
+
+@app.post("/instances/create")
+async def create_instance(request: Request):
+    """Cria nova instância WhatsApp para um tenant."""
+    sb = get_supabase()
+    body = await request.json()
+    tenant_id = body.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(400, "tenant_id obrigatório")
+
+    # Check if tenant already has an instance
+    existing = sb.table("whatsapp_instances").select("id").eq("tenant_id", tenant_id).execute()
+    if existing.data:
+        raise HTTPException(409, "Tenant já possui uma instância")
+
+    # Get tenant slug for naming
+    tenant = sb.table("tenants").select("slug, name").eq("id", tenant_id).single().execute()
+    if not tenant.data:
+        raise HTTPException(404, "Tenant não encontrado")
+
+    slug = tenant.data["slug"]
+    instance_name = f"{slug}-wa"
+
+    # Find next available port (start from 3001)
+    ports = sb.table("whatsapp_instances").select("port").order("port", desc=True).limit(1).execute()
+    next_port = ((ports.data[0]["port"] or 3000) + 1) if ports.data else 3001
+
+    # Insert instance record
+    inst = sb.table("whatsapp_instances").insert({
+        "tenant_id": tenant_id,
+        "instance_name": instance_name,
+        "port": next_port,
+        "status": "disconnected",
+    }).select().single().execute()
+
+    logger.info(f"Created instance {instance_name} for tenant {slug} on port {next_port}")
+
+    return {"instance": inst.data, "message": f"Instância criada. Para iniciar, rode o container Docker na porta {next_port}."}
+
+
 # ===== LEADS ENDPOINTS =====
 
 

@@ -179,6 +179,40 @@ export async function getChipsStatus() {
     } catch (e) { return { success: false } }
 }
 
+export async function getWhatsAppInstances() {
+    try {
+        const tid = await getTenantId()
+        const res = await fetch(`${DISPATCHER_API_URL}/instances`, { cache: 'no-store' })
+        if (!res.ok) return { success: false, instances: [] }
+        const data = await res.json()
+        // Filter by tenant
+        const filtered = (data.instances || []).filter((i: any) => i.tenant_id === tid)
+        return { success: true, instances: filtered }
+    } catch (e) { return { success: false, instances: [] } }
+}
+
+export async function getInstanceQR(instanceName: string) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/instances/${instanceName}/qr`, { cache: 'no-store' })
+        if (!res.ok) return { status: 'error', qr: null, number: null, name: null }
+        return await res.json()
+    } catch (e) { return { status: 'error', qr: null, number: null, name: null } }
+}
+
+export async function disconnectInstance(instanceName: string, clearAuth: boolean = false) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/instances/${instanceName}/disconnect?clear_auth=${clearAuth}`, { method: 'POST' })
+        return await res.json()
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
+export async function reconnectInstance(instanceName: string) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/instances/${instanceName}/reconnect`, { method: 'POST' })
+        return await res.json()
+    } catch (e: any) { return { success: false, error: e.message } }
+}
+
 export async function getChipQRData() {
     try {
         const res = await fetch(`${DISPATCHER_API_URL}/chips/qr-data`, { cache: 'no-store' })
