@@ -17,6 +17,7 @@ import {
     BarChart3,
     Search,
     Smartphone,
+    Shield,
 } from "lucide-react"
 
 const routes = [
@@ -29,6 +30,7 @@ const routes = [
     { label: "Prospectar", icon: Search, href: "/prospecting" },
     { label: "WhatsApp", icon: Smartphone, href: "/chips" },
     { label: "Configurações", icon: Settings, href: "/settings" },
+    { label: "Licenças", icon: Shield, href: "/admin/licenses", adminOnly: true },
 ]
 
 interface SidebarProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -51,7 +53,10 @@ export function Sidebar({ className, userProfile }: SidebarProps) {
     }
 
     const visibleRoutes = userProfile
-        ? routes.filter(r => canAccess(userProfile.role, r.href))
+        ? routes.filter(r => {
+            if ((r as any).adminOnly && userProfile.role !== 'admin') return false
+            return canAccess(userProfile.role, r.href)
+        })
         : routes
 
     return (
