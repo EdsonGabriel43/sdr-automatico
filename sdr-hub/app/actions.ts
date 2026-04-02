@@ -95,11 +95,12 @@ export async function importLeadsCsv(formData: FormData) {
     } catch (e: any) { return { success: false, error: e.message } }
 }
 
-export async function createAndStartCampaign(name: string, description: string, filters: any = null) {
+export async function createAndStartCampaign(name: string, description: string, filters: any = null, leadIds: string[] | null = null) {
     try {
+        const tid = await getTenantId()
         const createRes = await fetch(`${DISPATCHER_API_URL}/campaigns/create`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description, filters })
+            body: JSON.stringify({ name, description, filters, lead_ids: leadIds, tenant_id: tid })
         })
         if (!createRes.ok) throw new Error("Falha ao criar campanha")
         const { campaign } = await createRes.json()
@@ -407,10 +408,11 @@ export async function enrichProspects(resultIds: string[]) {
 
 export async function createCampaignFromProspects(searchId: string, resultIds: string[], campaignName: string, campaignDescription: string = "") {
     try {
+        const tid = await getTenantId()
         const res = await fetch(`${DISPATCHER_API_URL}/prospecting/to-campaign`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ search_id: searchId, result_ids: resultIds, campaign_name: campaignName, campaign_description: campaignDescription }),
+            body: JSON.stringify({ search_id: searchId, result_ids: resultIds, campaign_name: campaignName, campaign_description: campaignDescription, tenant_id: tid }),
         })
         if (!res.ok) throw new Error(`Erro API: ${res.statusText}`)
         return { success: true, data: await res.json() }

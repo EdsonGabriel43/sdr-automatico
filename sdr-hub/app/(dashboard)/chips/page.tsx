@@ -8,7 +8,8 @@ import {
 import { toast } from "sonner"
 import {
     getChipsStatus, getChipQRData, disconnectChip, reconnectChip,
-    swapChip, updateChipStatusAction, createChipAction
+    swapChip, updateChipStatusAction, createChipAction,
+    getWhatsAppInstances, getInstanceQR, disconnectInstance, reconnectInstance
 } from "@/app/actions"
 
 interface Chip {
@@ -34,10 +35,24 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }
     auth_failure: { label: "Erro Auth", color: "text-red-500", bg: "bg-red-500/10 border-red-500/30" },
 }
 
+interface WaInstance {
+    id: string
+    instance_name: string
+    phone_number: string | null
+    status: string
+    port: number | null
+    live_status?: string
+    live_number?: string
+    live_name?: string
+    tenants?: { name: string; slug: string }
+}
+
 export default function ChipsPage() {
     const [chips, setChips] = useState<Chip[]>([])
+    const [instances, setInstances] = useState<WaInstance[]>([])
     const [loading, setLoading] = useState(true)
     const [showQR, setShowQR] = useState(false)
+    const [activeInstanceName, setActiveInstanceName] = useState<string | null>(null)
     const [qrData, setQrData] = useState<{ status: string; qr: string | null; number: string | null; name: string | null }>({ status: "disconnected", qr: null, number: null, name: null })
     const [qrAction, setQrAction] = useState<string>("")
     const [showNewChip, setShowNewChip] = useState(false)
@@ -45,8 +60,9 @@ export default function ChipsPage() {
     const [actionLoading, setActionLoading] = useState<string | null>(null)
 
     const loadChips = useCallback(async () => {
-        const res = await getChipsStatus()
-        if (res.success && res.chips) setChips(res.chips)
+        const [chipsRes, instRes] = await Promise.all([getChipsStatus(), getWhatsAppInstances()])
+        if (chipsRes.success && chipsRes.chips) setChips(chipsRes.chips)
+        if (instRes.success && instRes.instances) setInstances(instRes.instances)
         setLoading(false)
     }, [])
 
@@ -60,16 +76,17 @@ export default function ChipsPage() {
 
     // QR polling when showing QR
     useEffect(() => {
-        if (!showQR) return
+        if (!showQR || !activeInstanceName) return
         let active = true
         const poll = async () => {
             while (active) {
-                const data = await getChipQRData()
+                const data = await getInstanceQR(activeInstanceName)
                 if (!active) break
                 setQrData(data)
                 if (data.status === "connected") {
                     toast.success(`WhatsApp conectado! ${data.number || ""}`)
                     setShowQR(false)
+                    setActiveInstanceName(null)
                     loadChips()
                     break
                 }
@@ -78,7 +95,7 @@ export default function ChipsPage() {
         }
         poll()
         return () => { active = false }
-    }, [showQR, loadChips])
+    }, [showQR, activeInstanceName, loadChips])
 
     const handleDisconnect = async (chipId: string) => {
         if (!confirm("Desconectar este chip do WhatsApp?")) return
@@ -161,6 +178,90 @@ export default function ChipsPage() {
                     </button>
                 </div>
             </div>
+
+            {/* WhatsApp Instance */}
+            {instances.length > 0 && (
+                <div className="space-y-3">
+                    {instances.map(inst => {
+                        const isConnected = inst.live_status === "connected" || inst.status === "connected"
+                        const isQrPending = inst.live_status === "qr" || inst.status === "qr_pending"
+
+                        return (
+                            <div key={inst.id} className={`bg-card border rounded-xl p-5 ${isConnected ? "border-emerald-500/30" : "border-border"}`}>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-4">
+                                        <div className={`p-3 rounded-xl ${isConnected ? "bg-emerald-500/10" : "bg-secondary"}`}>
+                                            {isConnected ? <Wifi className="h-6 w-6 text-emerald-500" /> : <WifiOff className="h-6 w-6 text-muted-foreground" />}
+                                        </div>
+                                        <div>
+                                            <h3 className="font-semibold text-foreground">Instância WhatsApp</h3>
+                                            <p className="text-sm text-muted-foreground">
+                                                {isConnected ? (
+                                                    <>{inst.live_number || inst.phone_number || "Conectado"} — {inst.live_name || ""}</>
+                                                ) : isQrPending ? (
+                                                    "Aguardando QR Code..."
+                                                ) : (
+                                                    "Desconectado"
+                                                )}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        {isConnected ? (
+                                            <>
+                                                <span className="px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-500">Conectado</span>
+                                                <button
+                                                    onClick={async () => {
+                                                        setActionLoading(inst.id)
+                                                        await disconnectInstance(inst.instance_name, false)
+                                                        toast.success("Desconectado")
+                                                        loadChips()
+                                                        setActionLoading(null)
+                                                    }}
+                                                    className="px-3 py-1.5 bg-red-500/10 text-red-500 rounded-lg text-xs font-medium hover:bg-red-500/20"
+                                                >
+                                                    <Power className="h-3.5 w-3.5" />
+                                                </button>
+                                                <button
+                                                    onClick={async () => {
+                                                        if (!confirm("Trocar número? Vai desconectar o atual e gerar novo QR.")) return
+                                                        setActionLoading(inst.id)
+                                                        await disconnectInstance(inst.instance_name, true)
+                                                        await reconnectInstance(inst.instance_name)
+                                                        setActiveInstanceName(inst.instance_name)
+                                                        setQrAction("Escaneie com o novo número")
+                                                        setShowQR(true)
+                                                        setActionLoading(null)
+                                                    }}
+                                                    className="px-3 py-1.5 bg-secondary text-foreground rounded-lg text-xs font-medium hover:bg-secondary/80"
+                                                >
+                                                    <ArrowLeftRight className="h-3.5 w-3.5" />
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <button
+                                                onClick={async () => {
+                                                    setActionLoading(inst.id)
+                                                    await reconnectInstance(inst.instance_name)
+                                                    setActiveInstanceName(inst.instance_name)
+                                                    setQrAction("Conecte seu WhatsApp")
+                                                    setShowQR(true)
+                                                    setActionLoading(null)
+                                                }}
+                                                disabled={actionLoading === inst.id}
+                                                className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-semibold hover:bg-primary/90 disabled:opacity-50"
+                                            >
+                                                {actionLoading === inst.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />}
+                                                Conectar WhatsApp
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )
+                    })}
+                </div>
+            )}
 
             {/* QR Code Section */}
             {showQR && (

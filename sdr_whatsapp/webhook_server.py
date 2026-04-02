@@ -208,6 +208,7 @@ class CreateCampaignRequest(BaseModel):
     description: str = ""
     lead_ids: Optional[list[str]] = None
     filters: Optional[dict] = None
+    tenant_id: Optional[str] = None
 
 
 class ImportLeadsRequest(BaseModel):
@@ -343,6 +344,22 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
 
         logger.info(f"📩 Mensagem de {phone}: \"{message_text[:80]}\" (type={message_type})")
 
+        # Resolver tenant_id a partir do instance_name
+        tenant_id = None
+        try:
+            sb = get_supabase()
+            inst = sb.table("whatsapp_instances").select("tenant_id").eq("instance_name", instance_name).single().execute()
+            if inst.data:
+                tenant_id = inst.data["tenant_id"]
+        except Exception:
+            # Fallback: tentar pelo chip
+            try:
+                chip = sb.table("chips").select("tenant_id").eq("instance_name", instance_name).single().execute()
+                if chip.data:
+                    tenant_id = chip.data.get("tenant_id")
+            except Exception:
+                pass
+
         # Processar em background para não bloquear o webhook
         background_tasks.add_task(
             process_incoming_message,
@@ -350,6 +367,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
             message_text=message_text,
             wa_message_id=wa_message_id,
             instance_name=instance_name,
+            tenant_id=tenant_id,
         )
 
         return {"status": "processing"}
@@ -1181,11 +1199,13 @@ async def list_leads(
 @app.post("/campaigns/create")
 async def create_campaign_endpoint(req: CreateCampaignRequest):
     """Cria uma nova campanha."""
+    tenant_id = getattr(req, 'tenant_id', None)
     campaign = create_campaign(
         name=req.name,
         description=req.description,
         lead_ids=req.lead_ids,
         filters=req.filters,
+        tenant_id=tenant_id,
     )
     return {"status": "created", "campaign": campaign}
 
