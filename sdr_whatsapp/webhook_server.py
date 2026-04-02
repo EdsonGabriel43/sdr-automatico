@@ -1093,19 +1093,17 @@ async def reconnect_instance(instance_name: str):
 
 @app.post("/instances/create")
 async def create_instance(request: Request):
-    """Cria nova instância WhatsApp para um tenant."""
+    """Cria nova instância WhatsApp para um tenant (registro apenas)."""
     sb = get_supabase()
     body = await request.json()
     tenant_id = body.get("tenant_id")
     if not tenant_id:
         raise HTTPException(400, "tenant_id obrigatório")
 
-    # Check if tenant already has an instance
     existing = sb.table("whatsapp_instances").select("id").eq("tenant_id", tenant_id).execute()
     if existing.data:
         raise HTTPException(409, "Tenant já possui uma instância")
 
-    # Get tenant slug for naming
     tenant = sb.table("tenants").select("slug, name").eq("id", tenant_id).single().execute()
     if not tenant.data:
         raise HTTPException(404, "Tenant não encontrado")
@@ -1113,11 +1111,9 @@ async def create_instance(request: Request):
     slug = tenant.data["slug"]
     instance_name = f"{slug}-wa"
 
-    # Find next available port (start from 3001)
     ports = sb.table("whatsapp_instances").select("port").order("port", desc=True).limit(1).execute()
     next_port = ((ports.data[0]["port"] or 3000) + 1) if ports.data else 3001
 
-    # Insert instance record
     inst = sb.table("whatsapp_instances").insert({
         "tenant_id": tenant_id,
         "instance_name": instance_name,
@@ -1126,8 +1122,177 @@ async def create_instance(request: Request):
     }).select().single().execute()
 
     logger.info(f"Created instance {instance_name} for tenant {slug} on port {next_port}")
+    return {"instance": inst.data}
 
-    return {"instance": inst.data, "message": f"Instância criada. Para iniciar, rode o container Docker na porta {next_port}."}
+
+@app.post("/instances/provision")
+async def provision_instance(request: Request, background_tasks: BackgroundTasks):
+    """
+    Provisionamento completo: cria tenant + licença + instância Docker + envia chave por WhatsApp.
+    Chamado pelo painel admin ao criar licença com provisioning.
+    """
+    import subprocess
+
+    sb = get_supabase()
+    body = await request.json()
+
+    tenant_name = body.get("tenant_name", "")
+    plan = body.get("plan", "pro")
+    validity_months = body.get("validity_months", 1)
+    client_phone = body.get("client_phone", "")
+    hub_url = body.get("hub_url", "https://sdr-hub.vercel.app")
+
+    if not tenant_name:
+        raise HTTPException(400, "tenant_name obrigatório")
+
+    # 1. Criar tenant
+    slug = tenant_name.lower().replace(" ", "-").replace(".", "")
+    slug = ''.join(c for c in slug if c.isalnum() or c == '-')
+
+    existing_tenant = sb.table("tenants").select("id").eq("slug", slug).execute()
+    if existing_tenant.data:
+        raise HTTPException(409, f"Tenant '{slug}' já existe")
+
+    tenant = sb.table("tenants").insert({"name": tenant_name, "slug": slug}).select().single().execute()
+    tenant_id = tenant.data["id"]
+
+    # 2. Gerar licença
+    import secrets
+    plan_prefixes = {"starter": "STR", "pro": "PRO", "enterprise": "ENT"}
+    plan_max_users = {"starter": 2, "pro": 4, "enterprise": 10}
+    prefix = plan_prefixes.get(plan, "PRO")
+    key = f"SDR-{prefix}-{secrets.token_hex(4).upper()}"
+
+    valid_until = datetime.now()
+    for _ in range(validity_months):
+        if valid_until.month == 12:
+            valid_until = valid_until.replace(year=valid_until.year + 1, month=1)
+        else:
+            valid_until = valid_until.replace(month=valid_until.month + 1)
+
+    sb.table("licenses").insert({
+        "key": key,
+        "tenant_id": tenant_id,
+        "plan": plan,
+        "max_users": plan_max_users.get(plan, 4),
+        "valid_until": valid_until.isoformat(),
+        "status": "active",
+    }).execute()
+
+    # 3. Criar instância WhatsApp
+    instance_name = f"{slug}-wa"
+    ports = sb.table("whatsapp_instances").select("port").order("port", desc=True).limit(1).execute()
+    next_port = ((ports.data[0]["port"] or 3000) + 1) if ports.data else 3002
+
+    sb.table("whatsapp_instances").insert({
+        "tenant_id": tenant_id,
+        "instance_name": instance_name,
+        "port": next_port,
+        "container_name": f"sdr-wa-{slug}",
+        "status": "disconnected",
+    }).execute()
+
+    # 4. Criar container Docker (background)
+    container_name = f"sdr-wa-{slug}"
+    wa_image = "sdr-backend-wa-server"
+    docker_network = body.get("docker_network", "")
+
+    async def provision_docker():
+        try:
+            cmd = [
+                "docker", "run", "-d",
+                "--name", container_name,
+                "--restart", "always",
+                "-e", f"INSTANCE_ID={instance_name}",
+                "-e", f"WA_PORT={next_port}",
+                "-e", f"WEBHOOK_URL=http://sdr-webhook-server:5000/webhook",
+                "-p", f"{next_port}:{next_port}",
+                wa_image,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                logger.info(f"Docker container {container_name} created on port {next_port}")
+                sb.table("whatsapp_instances").update({"status": "disconnected"}).eq("instance_name", instance_name).execute()
+            else:
+                logger.error(f"Docker error: {result.stderr}")
+        except Exception as e:
+            logger.error(f"Failed to provision Docker container: {e}")
+
+    background_tasks.add_task(provision_docker)
+
+    # 5. Criar template padrão para o tenant
+    sb.table("tenant_templates").insert({
+        "tenant_id": tenant_id,
+        "templates": {},
+        "system_prompt": f"Você é um assistente de vendas da empresa {tenant_name}.",
+        "classifier_prompt": "Classifique a intenção da mensagem do lead.",
+    }).execute()
+
+    # 6. Criar chip padrão para o tenant
+    sb.table("chips").insert({
+        "instance_name": instance_name,
+        "tenant_id": tenant_id,
+        "status": "warming",
+        "warming_start_date": datetime.now().strftime("%Y-%m-%d"),
+        "warming_day": 0,
+        "daily_limit": 5,
+        "messages_sent_today": 0,
+    }).execute()
+
+    # 7. Enviar chave por WhatsApp (se telefone fornecido)
+    wa_sent = False
+    if client_phone:
+        phone = client_phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        if not phone.startswith("55"):
+            phone = "55" + phone
+
+        message = (
+            f"🚀 *Sua licença SDR está ativa!*\n\n"
+            f"Empresa: *{tenant_name}*\n"
+            f"Plano: *{plan.capitalize()}*\n"
+            f"Validade: *{validity_months} {'mês' if validity_months == 1 else 'meses'}*\n\n"
+            f"🔑 Chave: `{key}`\n\n"
+            f"📱 Acesse: {hub_url}/activate\n\n"
+            f"*Como ativar:*\n"
+            f"1. Acesse o link acima\n"
+            f"2. Digite a chave\n"
+            f"3. Preencha nome, email e crie uma senha\n"
+            f"4. Pronto! Faça login e conecte seu WhatsApp\n\n"
+            f"Dúvidas? Responda esta mensagem."
+        )
+
+        try:
+            from .execution.chip_manager import send_text_message
+            await send_text_message("antigravity-wa", phone, message, tenant_id=None)
+            wa_sent = True
+            logger.info(f"License key sent to {phone} for tenant {tenant_name}")
+        except Exception as e:
+            logger.warning(f"Failed to send WhatsApp to {phone}: {e}")
+            # Try via direct HTTP to default wa-server
+            try:
+                resp = httpx.post(
+                    f"http://localhost:3001/send/text",
+                    json={"phone": phone, "text": message},
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    wa_sent = True
+            except Exception:
+                pass
+
+    logger.info(f"Provisioned tenant '{tenant_name}': key={key}, port={next_port}, wa_sent={wa_sent}")
+
+    return {
+        "success": True,
+        "tenant_id": tenant_id,
+        "tenant_name": tenant_name,
+        "license_key": key,
+        "instance_name": instance_name,
+        "port": next_port,
+        "container_name": container_name,
+        "whatsapp_sent": wa_sent,
+        "hub_url": f"{hub_url}/activate",
+    }
 
 
 # ===== LEADS ENDPOINTS =====

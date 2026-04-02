@@ -3,6 +3,9 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import crypto from "crypto"
 
+const DISPATCHER_API_URL = process.env.DISPATCHER_API_URL || "http://187.77.48.57:5000"
+const HUB_URL = process.env.NEXT_PUBLIC_HUB_URL || "https://sdr-hub.vercel.app"
+
 const PLAN_CONFIG: Record<string, { prefix: string; maxUsers: number }> = {
     starter: { prefix: "STR", maxUsers: 2 },
     pro: { prefix: "PRO", maxUsers: 4 },
@@ -101,6 +104,32 @@ export async function createLicense(tenantName: string, plan: string, validityMo
         if (licenseError) throw licenseError
 
         return { success: true, data: { ...license, tenant_name: tenantName } }
+    } catch (e: any) {
+        return { success: false, error: e.message }
+    }
+}
+
+export async function provisionLicense(tenantName: string, plan: string, validityMonths: number, clientPhone: string) {
+    try {
+        const res = await fetch(`${DISPATCHER_API_URL}/instances/provision`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                tenant_name: tenantName,
+                plan,
+                validity_months: validityMonths,
+                client_phone: clientPhone,
+                hub_url: HUB_URL,
+            }),
+        })
+
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }))
+            throw new Error(err.detail || `Erro ${res.status}`)
+        }
+
+        const data = await res.json()
+        return { success: true, data }
     } catch (e: any) {
         return { success: false, error: e.message }
     }

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { Shield, Plus, Search, Key, Users, Calendar, Ban, RefreshCw, ChevronDown, ChevronRight, Trash2, Copy, Check } from "lucide-react"
 import { toast } from "sonner"
-import { listLicenses, createLicense, revokeLicense, reactivateLicense, extendLicense, getTenantUsers, deleteTenantUser } from "./actions"
+import { listLicenses, createLicense, provisionLicense, revokeLicense, reactivateLicense, extendLicense, getTenantUsers, deleteTenantUser } from "./actions"
 
 interface License {
     id: string
@@ -55,7 +55,8 @@ export default function AdminLicensesPage() {
     // Create form
     const [newTenantName, setNewTenantName] = useState("")
     const [newPlan, setNewPlan] = useState("pro")
-    const [newValidity, setNewValidity] = useState(12)
+    const [newValidity, setNewValidity] = useState(1)
+    const [newClientPhone, setNewClientPhone] = useState("")
     const [creating, setCreating] = useState(false)
 
     // Extend
@@ -75,14 +76,31 @@ export default function AdminLicensesPage() {
     const handleCreate = async () => {
         if (!newTenantName.trim()) { toast.error("Nome da empresa obrigatório"); return }
         setCreating(true)
-        const res = await createLicense(newTenantName.trim(), newPlan, newValidity)
-        if (res.success) {
-            toast.success(`Licença criada: ${res.data?.key}`)
-            setShowCreate(false)
-            setNewTenantName("")
-            fetchLicenses()
+
+        if (newClientPhone.trim()) {
+            // Provisionamento completo: tenant + licença + Docker + WhatsApp
+            const res = await provisionLicense(newTenantName.trim(), newPlan, newValidity, newClientPhone.trim())
+            if (res.success) {
+                const d = res.data
+                toast.success(`Licença ${d.license_key} criada e ${d.whatsapp_sent ? "enviada por WhatsApp" : "pronta (WhatsApp não enviado)"}`)
+                setShowCreate(false)
+                setNewTenantName("")
+                setNewClientPhone("")
+                fetchLicenses()
+            } else {
+                toast.error(res.error)
+            }
         } else {
-            toast.error(res.error)
+            // Criação simples (sem provisionamento Docker/WhatsApp)
+            const res = await createLicense(newTenantName.trim(), newPlan, newValidity)
+            if (res.success) {
+                toast.success(`Licença criada: ${res.data?.key}`)
+                setShowCreate(false)
+                setNewTenantName("")
+                fetchLicenses()
+            } else {
+                toast.error(res.error)
+            }
         }
         setCreating(false)
     }
@@ -181,7 +199,7 @@ export default function AdminLicensesPage() {
             {showCreate && (
                 <div className="bg-card border border-primary/30 rounded-xl p-6 space-y-4">
                     <h2 className="text-sm font-semibold text-foreground">Criar Nova Licença</h2>
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="text-xs text-muted-foreground mb-1 block">Nome da Empresa</label>
                             <input
@@ -189,6 +207,16 @@ export default function AdminLicensesPage() {
                                 value={newTenantName}
                                 onChange={e => setNewTenantName(e.target.value)}
                                 placeholder="Ex: Clínica Dr. Silva"
+                                className="w-full px-3 py-2 bg-secondary/50 border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-xs text-muted-foreground mb-1 block">WhatsApp do Cliente</label>
+                            <input
+                                type="text"
+                                value={newClientPhone}
+                                onChange={e => setNewClientPhone(e.target.value)}
+                                placeholder="5541999887766"
                                 className="w-full px-3 py-2 bg-secondary/50 border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
                             />
                         </div>
@@ -211,19 +239,21 @@ export default function AdminLicensesPage() {
                                 onChange={e => setNewValidity(Number(e.target.value))}
                                 className="w-full px-3 py-2 bg-secondary/50 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
                             >
+                                <option value={1}>1 mês (MVP)</option>
                                 <option value={3}>3 meses</option>
                                 <option value={6}>6 meses</option>
                                 <option value={12}>1 ano</option>
                             </select>
                         </div>
                     </div>
+                    <p className="text-xs text-muted-foreground mt-2">Com WhatsApp preenchido: cria tenant + licença + container Docker + envia chave automaticamente</p>
                     <div className="flex gap-2 pt-2">
                         <button
                             onClick={handleCreate}
                             disabled={creating}
                             className="px-5 py-2.5 bg-primary text-primary-foreground rounded-lg text-sm font-semibold hover:bg-primary/90 disabled:opacity-50"
                         >
-                            {creating ? "Gerando..." : "Gerar Licença"}
+                            {creating ? "Provisionando..." : newClientPhone.trim() ? "Criar e Enviar por WhatsApp" : "Gerar Licença"}
                         </button>
                         <button onClick={() => setShowCreate(false)} className="px-4 py-2.5 bg-secondary text-foreground rounded-lg text-sm hover:bg-secondary/80">
                             Cancelar
