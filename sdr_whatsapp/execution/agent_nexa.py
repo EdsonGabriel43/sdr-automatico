@@ -316,6 +316,10 @@ async def _process_incoming_message_impl(
     """Implementação interna do processamento de mensagens."""
     sb = get_supabase()
 
+    if not tenant_id:
+        logger.warning(f"Mensagem de {phone} ignorada: tenant_id não resolvido")
+        return None
+
     # Set tenant context for message routing
     set_current_tenant(tenant_id)
 

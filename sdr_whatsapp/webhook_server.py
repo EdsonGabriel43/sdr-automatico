@@ -352,13 +352,16 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
             if inst.data:
                 tenant_id = inst.data["tenant_id"]
         except Exception:
-            # Fallback: tentar pelo chip
             try:
                 chip = sb.table("chips").select("tenant_id").eq("instance_name", instance_name).single().execute()
                 if chip.data:
                     tenant_id = chip.data.get("tenant_id")
             except Exception:
                 pass
+
+        if not tenant_id:
+            logger.warning(f"Mensagem de {phone} ignorada: tenant_id não resolvido para instance={instance_name}")
+            return {"status": "ignored", "reason": "tenant_not_found"}
 
         # Processar em background para não bloquear o webhook
         background_tasks.add_task(
@@ -997,9 +1000,11 @@ async def list_instances():
 
     # Check live status of each instance
     for inst in instances:
-        if inst.get("port"):
+        container = inst.get("container_name")
+        port = inst.get("port")
+        if container and port:
             try:
-                resp = httpx.get(f"http://172.17.0.1:{inst['port']}/status", timeout=3)
+                resp = httpx.get(f"http://{container}:{port}/status", timeout=3)
                 if resp.status_code == 200:
                     live = resp.json()
                     inst["live_status"] = live.get("status", "unknown")
@@ -1024,11 +1029,12 @@ async def get_instance_qr(instance_name: str):
         raise HTTPException(404, "Instância não encontrada")
 
     port = inst.data.get("port")
-    if not port:
-        raise HTTPException(400, "Instância sem porta configurada")
+    container = inst.data.get("container_name")
+    if not port or not container:
+        raise HTTPException(400, "Instância sem porta ou container configurado")
 
     try:
-        resp = httpx.get(f"http://172.17.0.1:{port}/qr/json", timeout=5)
+        resp = httpx.get(f"http://{container}:{port}/qr/json", timeout=5)
         return resp.json()
     except Exception as e:
         raise HTTPException(503, f"Instância offline: {e}")
@@ -1060,11 +1066,12 @@ async def disconnect_instance(instance_name: str, clear_auth: bool = False):
         raise HTTPException(404, "Instância não encontrada")
 
     port = inst.data.get("port")
-    if not port:
-        raise HTTPException(400, "Instância sem porta configurada")
+    container = inst.data.get("container_name")
+    if not port or not container:
+        raise HTTPException(400, "Instância sem porta ou container configurado")
 
     try:
-        resp = httpx.post(f"http://172.17.0.1:{port}/disconnect?clear_auth={'true' if clear_auth else 'false'}", timeout=10)
+        resp = httpx.post(f"http://{container}:{port}/disconnect?clear_auth={'true' if clear_auth else 'false'}", timeout=10)
         sb.table("whatsapp_instances").update({"status": "disconnected", "phone_number": None}).eq("instance_name", instance_name).execute()
         return resp.json()
     except Exception as e:
@@ -1080,11 +1087,12 @@ async def reconnect_instance(instance_name: str):
         raise HTTPException(404, "Instância não encontrada")
 
     port = inst.data.get("port")
-    if not port:
-        raise HTTPException(400, "Instância sem porta configurada")
+    container = inst.data.get("container_name")
+    if not port or not container:
+        raise HTTPException(400, "Instância sem porta ou container configurado")
 
     try:
-        resp = httpx.post(f"http://172.17.0.1:{port}/reconnect", timeout=10)
+        resp = httpx.post(f"http://{container}:{port}/reconnect", timeout=10)
         sb.table("whatsapp_instances").update({"status": "qr_pending"}).eq("instance_name", instance_name).execute()
         return resp.json()
     except Exception as e:

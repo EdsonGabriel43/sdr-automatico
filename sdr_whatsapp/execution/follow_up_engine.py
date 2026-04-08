@@ -174,12 +174,12 @@ async def check_nurturing_followups() -> dict:
                 ).eq("id", conv["id"]).execute()
                 continue
 
-        # Garantir chip disponível
+        # Garantir chip disponível (filtrado por tenant)
         if not chip or chip.get("status") not in ("active", "warming"):
-            chip_data = get_available_chip()
+            chip_data = get_available_chip(conv.get("tenant_id"))
             if not chip_data:
-                logger.warning("Nenhum chip disponível para follow-up nurturing")
-                break
+                logger.warning(f"Nenhum chip disponível para follow-up nurturing (tenant={conv.get('tenant_id')})")
+                continue
             chip = chip_data
             sb.table("conversations").update({"chip_id": chip["id"]}).eq("id", conv["id"]).execute()
 
@@ -310,12 +310,12 @@ async def check_and_send_followups() -> dict:
                 ).eq("id", conv["id"]).execute()
                 continue
 
-        # Verificar se o chip ainda está disponível
+        # Verificar se o chip ainda está disponível (filtrado por tenant)
         if not chip or chip.get("status") not in ("active", "warming"):
-            chip_data = get_available_chip()
+            chip_data = get_available_chip(conv.get("tenant_id"))
             if not chip_data:
-                logger.warning("Nenhum chip disponível para follow-up")
-                break
+                logger.warning(f"Nenhum chip disponível para follow-up (tenant={conv.get('tenant_id')})")
+                continue
             chip = chip_data
             sb.table("conversations").update(
                 {"chip_id": chip["id"]}

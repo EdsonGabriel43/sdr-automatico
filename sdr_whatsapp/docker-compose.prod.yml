@@ -1,16 +1,4 @@
-version: '3.8'
-
 services:
-  wa-server:
-    build: ./wa-server
-    container_name: sdr-wa-server
-    restart: always
-    ports:
-      - "3001:3001"
-    environment:
-      - PORT=3001
-      - WEBHOOK_URL=http://webhook-server:5000/webhook
-
   webhook-server:
     build:
       context: .
@@ -19,9 +7,43 @@ services:
     restart: always
     ports:
       - "5000:5000"
-    environment:
-      - WA_SERVER_URL=http://wa-server:3001
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     env_file:
       - .env
+    environment:
+      - WA_SERVER_URL=http://wa-server:3001
+    networks:
+      - sdr-network
     depends_on:
       - wa-server
+
+  wa-server:
+    build: ./wa-server
+    container_name: sdr-wa-server
+    restart: always
+    ports:
+      - "3001:3001"
+    environment:
+      - INSTANCE_ID=antigravity-wa
+      - WA_PORT=3001
+      - WEBHOOK_URL=http://webhook-server:5000/webhook
+    networks:
+      - sdr-network
+
+  wa-nicolle-macedo:
+    build: ./wa-server
+    container_name: sdr-wa-nicolle-macedo
+    restart: always
+    ports:
+      - "3002:3002"
+    environment:
+      - INSTANCE_ID=nicolle-macedo-wa
+      - WA_PORT=3002
+      - WEBHOOK_URL=http://webhook-server:5000/webhook
+    networks:
+      - sdr-network
+
+networks:
+  sdr-network:
+    driver: bridge
