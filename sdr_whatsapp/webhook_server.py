@@ -8,6 +8,7 @@ import asyncio
 import base64
 import tempfile
 import logging
+import httpx
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import Optional
