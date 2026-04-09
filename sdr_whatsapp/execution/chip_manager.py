@@ -32,17 +32,15 @@ def get_current_tenant() -> Optional[str]:
     return _current_tenant_id
 
 def _get_wa_url_for_tenant(tenant_id: str = None) -> str:
-    """Resolve the wa-server URL for a given tenant using container_name from DB."""
+    """Resolve the wa-server URL for a given tenant using port from DB."""
     if not tenant_id:
         return WA_SERVER_URL
     try:
         sb = get_supabase()
-        inst = sb.table("whatsapp_instances").select("container_name, port").eq("tenant_id", tenant_id).single().execute()
-        if inst.data:
-            container = inst.data.get("container_name")
-            port = inst.data.get("port")
-            if container and port:
-                return f"http://{container}:{port}"
+        inst = sb.table("whatsapp_instances").select("port").eq("tenant_id", tenant_id).single().execute()
+        if inst.data and inst.data.get("port"):
+            wa_host = os.getenv("WA_HOST", "host.docker.internal")
+            return f"http://{wa_host}:{inst.data['port']}"
     except Exception:
         pass
     return WA_SERVER_URL

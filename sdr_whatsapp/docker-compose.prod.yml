@@ -13,6 +13,9 @@ services:
       - .env
     environment:
       - WA_SERVER_URL=http://wa-server:3001
+      - WA_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - sdr-network
     depends_on:

@@ -999,12 +999,13 @@ async def list_instances():
     instances = result.data or []
 
     # Check live status of each instance
+    # Use WA_SERVER_URL base or direct port access
+    wa_host = os.getenv("WA_HOST", "host.docker.internal")
     for inst in instances:
-        container = inst.get("container_name")
         port = inst.get("port")
-        if container and port:
+        if port:
             try:
-                resp = httpx.get(f"http://{container}:{port}/status", timeout=3)
+                resp = httpx.get(f"http://{wa_host}:{port}/status", timeout=3)
                 if resp.status_code == 200:
                     live = resp.json()
                     inst["live_status"] = live.get("status", "unknown")
@@ -1029,12 +1030,12 @@ async def get_instance_qr(instance_name: str):
         raise HTTPException(404, "Instância não encontrada")
 
     port = inst.data.get("port")
-    container = inst.data.get("container_name")
-    if not port or not container:
-        raise HTTPException(400, "Instância sem porta ou container configurado")
+    if not port:
+        raise HTTPException(400, "Instância sem porta configurada")
 
+    wa_host = os.getenv("WA_HOST", "host.docker.internal")
     try:
-        resp = httpx.get(f"http://{container}:{port}/qr/json", timeout=5)
+        resp = httpx.get(f"http://{wa_host}:{port}/qr/json", timeout=5)
         return resp.json()
     except Exception as e:
         raise HTTPException(503, f"Instância offline: {e}")
@@ -1066,12 +1067,12 @@ async def disconnect_instance(instance_name: str, clear_auth: bool = False):
         raise HTTPException(404, "Instância não encontrada")
 
     port = inst.data.get("port")
-    container = inst.data.get("container_name")
-    if not port or not container:
-        raise HTTPException(400, "Instância sem porta ou container configurado")
+    if not port:
+        raise HTTPException(400, "Instância sem porta configurada")
 
+    wa_host = os.getenv("WA_HOST", "host.docker.internal")
     try:
-        resp = httpx.post(f"http://{container}:{port}/disconnect?clear_auth={'true' if clear_auth else 'false'}", timeout=10)
+        resp = httpx.post(f"http://{wa_host}:{port}/disconnect?clear_auth={'true' if clear_auth else 'false'}", timeout=10)
         sb.table("whatsapp_instances").update({"status": "disconnected", "phone_number": None}).eq("instance_name", instance_name).execute()
         return resp.json()
     except Exception as e:
@@ -1087,12 +1088,12 @@ async def reconnect_instance(instance_name: str):
         raise HTTPException(404, "Instância não encontrada")
 
     port = inst.data.get("port")
-    container = inst.data.get("container_name")
-    if not port or not container:
-        raise HTTPException(400, "Instância sem porta ou container configurado")
+    if not port:
+        raise HTTPException(400, "Instância sem porta configurada")
 
+    wa_host = os.getenv("WA_HOST", "host.docker.internal")
     try:
-        resp = httpx.post(f"http://{container}:{port}/reconnect", timeout=10)
+        resp = httpx.post(f"http://{wa_host}:{port}/reconnect", timeout=10)
         sb.table("whatsapp_instances").update({"status": "qr_pending"}).eq("instance_name", instance_name).execute()
         return resp.json()
     except Exception as e:
