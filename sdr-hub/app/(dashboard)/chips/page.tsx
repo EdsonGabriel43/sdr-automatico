@@ -3,12 +3,12 @@
 import { useState, useEffect, useCallback } from "react"
 import {
     Smartphone, Wifi, WifiOff, QrCode, RefreshCw, Plus, Pause, Play,
-    Power, ArrowLeftRight, Loader2, X, Signal, MessageCircle
+    Power, ArrowLeftRight, Loader2, X, Signal, MessageCircle, Trash2
 } from "lucide-react"
 import { toast } from "sonner"
 import {
     getChipsStatus, getChipQRData, disconnectChip, reconnectChip,
-    swapChip, updateChipStatusAction, createChipAction,
+    swapChip, updateChipStatusAction, createChipAction, deleteChip,
     getWhatsAppInstances, getInstanceQR, disconnectInstance, reconnectInstance
 } from "@/app/actions"
 
@@ -127,6 +127,15 @@ export default function ChipsPage() {
             setShowQR(true)
             loadChips()
         } else toast.error("Erro ao trocar número")
+        setActionLoading(null)
+    }
+
+    const handleDelete = async (chip: Chip) => {
+        if (!confirm(`Excluir "${chip.instance_name}"? O WhatsApp será desconectado e o chip removido permanentemente.`)) return
+        setActionLoading(chip.id)
+        const res = await deleteChip(chip.id)
+        if (res.success) { toast.success("Chip excluído"); loadChips() }
+        else toast.error(res.error || "Erro ao excluir")
         setActionLoading(null)
     }
 
@@ -444,6 +453,10 @@ export default function ChipsPage() {
                                                     </button>
                                                 </>
                                             )}
+                                            {/* Delete button — always visible */}
+                                            <button onClick={() => handleDelete(chip)} className="inline-flex items-center justify-center p-2 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all" title="Excluir chip">
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                            </button>
                                         </>
                                     )}
                                 </div>

@@ -174,10 +174,33 @@ export async function sendManualMessage(conversationId: string, message: string)
 
 export async function getChipsStatus() {
     try {
-        const res = await fetch(`${DISPATCHER_API_URL}/chips`, { cache: 'no-store' })
-        if (!res.ok) return { success: false }
-        return { success: true, chips: (await res.json()).chips }
-    } catch (e) { return { success: false } }
+        const tid = await getTenantId()
+        const { data: chips } = await supabaseAdmin
+            .from('chips')
+            .select('*')
+            .eq('tenant_id', tid)
+            .order('created_at')
+        return { success: true, chips: chips || [] }
+    } catch (e) { return { success: false, chips: [] } }
+}
+
+export async function deleteChip(chipId: string) {
+    try {
+        const tid = await getTenantId()
+        const { data: chip } = await supabaseAdmin
+            .from('chips')
+            .select('instance_name, tenant_id')
+            .eq('id', chipId)
+            .single()
+        if (!chip || chip.tenant_id !== tid) return { success: false, error: 'Chip não encontrado' }
+
+        try {
+            await fetch(`${DISPATCHER_API_URL}/chips/${chipId}/disconnect`, { method: 'POST' })
+        } catch (e) { /* ignore */ }
+
+        await supabaseAdmin.from('chips').delete().eq('id', chipId)
+        return { success: true }
+    } catch (e: any) { return { success: false, error: e.message } }
 }
 
 export async function getWhatsAppInstances() {
