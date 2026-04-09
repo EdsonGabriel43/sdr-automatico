@@ -998,25 +998,26 @@ async def list_instances():
     result = sb.table("whatsapp_instances").select("*, tenants(name, slug)").execute()
     instances = result.data or []
 
-    # Check live status of each instance
-    # Use WA_SERVER_URL base or direct port access
+    # Check live status of each instance using async client
     wa_host = os.getenv("WA_HOST", "host.docker.internal")
-    for inst in instances:
-        port = inst.get("port")
-        if port:
-            try:
-                resp = httpx.get(f"http://{wa_host}:{port}/status", timeout=3)
-                if resp.status_code == 200:
-                    live = resp.json()
-                    inst["live_status"] = live.get("status", "unknown")
-                    inst["live_number"] = live.get("number")
-                    inst["live_name"] = live.get("name")
-                else:
-                    inst["live_status"] = "unreachable"
-            except Exception:
-                inst["live_status"] = "offline"
-        else:
-            inst["live_status"] = "no_port"
+    async with httpx.AsyncClient(timeout=5) as client:
+        for inst in instances:
+            port = inst.get("port")
+            if port:
+                try:
+                    resp = await client.get(f"http://{wa_host}:{port}/status")
+                    if resp.status_code == 200:
+                        live = resp.json()
+                        inst["live_status"] = live.get("status", "unknown")
+                        inst["live_number"] = live.get("number")
+                        inst["live_name"] = live.get("name")
+                    else:
+                        inst["live_status"] = "unreachable"
+                except Exception as e:
+                    inst["live_status"] = "offline"
+                    logger.warning(f"Instance {inst.get('instance_name')} health check failed: {e}")
+            else:
+                inst["live_status"] = "no_port"
 
     return {"instances": instances}
 
@@ -1035,8 +1036,9 @@ async def get_instance_qr(instance_name: str):
 
     wa_host = os.getenv("WA_HOST", "host.docker.internal")
     try:
-        resp = httpx.get(f"http://{wa_host}:{port}/qr/json", timeout=5)
-        return resp.json()
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"http://{wa_host}:{port}/qr/json")
+            return resp.json()
     except Exception as e:
         raise HTTPException(503, f"Instância offline: {e}")
 
@@ -1072,7 +1074,8 @@ async def disconnect_instance(instance_name: str, clear_auth: bool = False):
 
     wa_host = os.getenv("WA_HOST", "host.docker.internal")
     try:
-        resp = httpx.post(f"http://{wa_host}:{port}/disconnect?clear_auth={'true' if clear_auth else 'false'}", timeout=10)
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(f"http://{wa_host}:{port}/disconnect?clear_auth={'true' if clear_auth else 'false'}")
         sb.table("whatsapp_instances").update({"status": "disconnected", "phone_number": None}).eq("instance_name", instance_name).execute()
         return resp.json()
     except Exception as e:
@@ -1093,7 +1096,8 @@ async def reconnect_instance(instance_name: str):
 
     wa_host = os.getenv("WA_HOST", "host.docker.internal")
     try:
-        resp = httpx.post(f"http://{wa_host}:{port}/reconnect", timeout=10)
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(f"http://{wa_host}:{port}/reconnect")
         sb.table("whatsapp_instances").update({"status": "qr_pending"}).eq("instance_name", instance_name).execute()
         return resp.json()
     except Exception as e:
