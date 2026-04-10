@@ -232,6 +232,7 @@ class ProspectingSearchRequest(BaseModel):
     platforms: list[str] = ["linkedin", "instagram", "google", "google_places"]
     location: Optional[str] = None
     enable_deep_scraping: bool = False
+    tenant_id: Optional[str] = None
 
 class ProspectingEnrichRequest(BaseModel):
     result_ids: list[str]
@@ -1743,7 +1744,7 @@ Retorne APENAS JSON no formato:
         return []
 
 
-async def run_prospecting_search(search_id: str, query: str, mode: str, platforms: list[str], location: str = None, enable_deep_scraping: bool = False):
+async def run_prospecting_search(search_id: str, query: str, mode: str, platforms: list[str], location: str = None, enable_deep_scraping: bool = False, tenant_id: str = None):
     """Background task: generates queries, searches, parses, stores in Supabase."""
     sb = get_supabase()
 
@@ -1834,6 +1835,8 @@ async def run_prospecting_search(search_id: str, query: str, mode: str, platform
                 continue
             if url:
                 seen_urls.add(url)
+            if tenant_id:
+                r["tenant_id"] = tenant_id
             unique_results.append(r)
 
         # Insert into Supabase in batches
@@ -1867,12 +1870,16 @@ async def start_prospecting_search_endpoint(req: ProspectingSearchRequest, backg
     """Inicia uma busca de prospectos em múltiplas plataformas."""
     sb = get_supabase()
 
-    search = sb.table("prospect_searches").insert({
+    search_data = {
         "query_text": req.query,
         "search_type": req.mode,
         "filters": {"platforms": req.platforms, "location": req.location},
         "status": "pending",
-    }).execute()
+    }
+    if req.tenant_id:
+        search_data["tenant_id"] = req.tenant_id
+
+    search = sb.table("prospect_searches").insert(search_data).execute()
 
     search_id = search.data[0]["id"]
 
@@ -1884,6 +1891,7 @@ async def start_prospecting_search_endpoint(req: ProspectingSearchRequest, backg
         platforms=req.platforms,
         location=req.location,
         enable_deep_scraping=req.enable_deep_scraping,
+        tenant_id=req.tenant_id,
     )
 
     return {"search_id": search_id, "status": "pending"}

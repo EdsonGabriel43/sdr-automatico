@@ -388,10 +388,11 @@ export async function startSocialEnrichment(items: { url: string; platform?: str
 
 export async function startProspectingSearch(query: string, mode: string, platforms: string[], location: string | null, enableDeepScraping: boolean = false) {
     try {
+        const tid = await getTenantId()
         const res = await fetch(`${DISPATCHER_API_URL}/prospecting/search`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query, mode, platforms, location, enable_deep_scraping: enableDeepScraping }),
+            body: JSON.stringify({ query, mode, platforms, location, enable_deep_scraping: enableDeepScraping, tenant_id: tid }),
         })
         if (!res.ok) throw new Error(`Erro API: ${res.statusText}`)
         return { success: true, data: await res.json() }
