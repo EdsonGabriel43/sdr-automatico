@@ -31,6 +31,9 @@ services:
       - INSTANCE_ID=antigravity-wa
       - WA_PORT=3001
       - WEBHOOK_URL=http://webhook-server:5000/webhook
+    volumes:
+      - wa-antigravity-auth:/usr/src/app/.wwebjs_auth_antigravity-wa
+      - wa-antigravity-cache:/usr/src/app/.wwebjs_cache
     networks:
       - sdr-network
 
@@ -44,8 +47,21 @@ services:
       - INSTANCE_ID=nicolle-macedo-wa
       - WA_PORT=3002
       - WEBHOOK_URL=http://webhook-server:5000/webhook
+    volumes:
+      - wa-nicolle-auth:/usr/src/app/.wwebjs_auth_nicolle-macedo-wa
+      - wa-nicolle-cache:/usr/src/app/.wwebjs_cache
     networks:
       - sdr-network
+
+volumes:
+  wa-antigravity-auth:
+    driver: local
+  wa-antigravity-cache:
+    driver: local
+  wa-nicolle-auth:
+    driver: local
+  wa-nicolle-cache:
+    driver: local
 
 networks:
   sdr-network:
